@@ -7,9 +7,8 @@ require('dotenv').config({ path: './.env' });
 
 
 
-const documentRoutes = require('./routes/documentRoutes');
-const chatRoutes = require('./routes/chatRoutes');
-const secretManagerRoutes = require('./routes/secretManagerRoutes');
+const templateRoutes = require('./routes/templateRoutes');
+
 
 const app = express();
 
@@ -40,9 +39,8 @@ app.use(cors({
 
 // Routes
 
-app.use('/api/doc', documentRoutes);
-app.use('/api/doc', chatRoutes);
-app.use('/api/doc', secretManagerRoutes);
+app.use('/api/templates', templateRoutes);
+
 
 // Test route
 app.get('/api/test-route', (req, res) => {

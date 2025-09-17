@@ -1,5 +1,4 @@
 const { verifyToken } = require('../utils/jwt');
-const User = require('../models/User');
 
 const authenticateToken = async (req, res, next) => {
   try {
@@ -28,19 +27,16 @@ const authenticateToken = async (req, res, next) => {
       console.log("❌ Authentication failed: User ID missing from token payload.");
       return res.status(400).json({ message: 'User ID missing from token' });
     }
-    console.log("🔍 Searching for user with ID:", userId);
-
-    // ✅ Use your custom model method
-    const user = await User.findById(userId);
-
-    if (!user) {
-      console.log("❌ Authentication failed: User not found in database for ID:", userId);
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    req.user = user;
-    req.userId = user.id;
-    console.log("✅ User authenticated:", user.email);
+    
+    // In a microservice architecture, we rely on the token payload for user data
+    // The 'decoded' object should contain sufficient user information (e.g., id, email, role)
+    req.user = {
+      id: decoded.id || decoded.userId,
+      email: decoded.email,
+      role: decoded.role
+    };
+    req.userId = decoded.id || decoded.userId;
+    console.log("✅ User authenticated from token:", req.user.email);
     next();
   } catch (error) {
     console.error('❌ Error authenticating token:', error.message);
