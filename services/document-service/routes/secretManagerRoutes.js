@@ -12,7 +12,7 @@ const {
 router.get('/secrets', getAllSecrets);
 
 // 🔐 GET /api/secrets/:id → fetch secret value from GCP using internal UUID
-router.get('/:id', fetchSecretValueFromGCP);
+router.get('/secrets/:id', fetchSecretValueFromGCP);
 
 // 📥 POST /api/secrets/create → add new secret to GCP + DB
 router.post('/create', createSecretInGCP);

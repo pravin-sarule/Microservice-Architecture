@@ -13,7 +13,7 @@ const {
 } = require('../controllers/paymentController');
 const { protect } = require('../middleware/auth');
 const { checkTokenUsage } = require('../middleware/tokenAuth'); // Import checkTokenUsage
-
+const {getAllPlans} = require('../controllers/userplanController');
 const router = express.Router();
 
 // 🔔 Middleware to log all payment-related requests
@@ -24,6 +24,9 @@ router.use((req, res, next) => {
   console.log('User from auth (if any):', req.user);
   next();
 });
+
+router.route('/plans')
+    .get(getAllPlans);
 
 // ✅ Open Test Routes
 router.get('/test', (req, res) => {
