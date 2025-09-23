@@ -190,4 +190,19 @@ module.exports = {
   createJob,
   updateJobStatus,
   getJobByFileId,
+  // Update multiple fields of a job
+  async updateJob(jobId, updates) {
+    const fields = Object.keys(updates);
+    const values = Object.values(updates);
+    const setClause = fields.map((field, index) => `${field} = $${index + 2}`).join(', ');
+
+    const query = `
+      UPDATE processing_jobs
+      SET ${setClause}, updated_at = NOW()
+      WHERE job_id = $1
+      RETURNING *;
+    `;
+    const { rows } = await db.query(query, [jobId, ...values]);
+    return rows[0];
+  },
 };

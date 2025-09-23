@@ -6,12 +6,12 @@ const { v4: uuidv4 } = require('uuid'); // Import uuid
 
 class File {
   // Create a new file or folder
-  static async create({ user_id, originalname, gcs_path, folder_path, mimetype, size, is_folder = false }) {
+  static async create({ user_id, originalname, gcs_path, folder_path, mimetype, size, is_folder = false, status = 'uploaded', processing_progress = 0.00 }) {
     const id = uuidv4(); // Generate a UUID for the new file/folder
     const result = await pool.query(
-      `INSERT INTO user_files (id, user_id, originalname, gcs_path, folder_path, mimetype, size, is_folder, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW()) RETURNING *`,
-      [id, user_id, originalname, gcs_path, folder_path, mimetype, size, is_folder]
+      `INSERT INTO user_files (id, user_id, originalname, gcs_path, folder_path, mimetype, size, is_folder, status, processing_progress, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW()) RETURNING *`,
+      [id, user_id, originalname, gcs_path, folder_path, mimetype, size, is_folder, status, processing_progress]
     );
     return result.rows[0];
   }
@@ -51,9 +51,18 @@ class File {
   }
 
   // Find a specific file by ID
-  static async findById(id) {
+  static async getFileById(id) { // Renamed from findById
     const result = await pool.query('SELECT * FROM user_files WHERE id = $1::uuid', [id]); // Cast to UUID
     return result.rows[0];
+  }
+
+  // Update file summary
+  static async updateSummary(fileId, summary) {
+    await pool.query(`
+      UPDATE user_files
+      SET summary = $1, updated_at = NOW()
+      WHERE id = $2::uuid
+    `, [summary, fileId]);
   }
 
   // Find a folder by name and path
@@ -272,6 +281,15 @@ class File {
        EXTRACT(EPOCH FROM updated_at) as updated_timestamp
        FROM user_files WHERE id = $1::uuid`, // Cast to UUID
       [id]
+    );
+    return result.rows[0];
+  }
+
+  // Update processing status and progress
+  static async updateProcessingStatus(id, status, progress) {
+    const result = await pool.query(
+      `UPDATE user_files SET status = $2, processing_progress = $3, updated_at = NOW() WHERE id = $1::uuid RETURNING *`,
+      [id, status, progress]
     );
     return result.rows[0];
   }

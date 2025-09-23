@@ -87,7 +87,23 @@ const DocumentModel = {
       WHERE chunk_id = ANY($1::int[])
     `, [chunkIds]);
     return res.rows;
+  }, // Added comma
+  async getFilesByUserIdAndFolderPath(userId, folderPath) {
+    const res = await pool.query(`
+      SELECT * FROM user_files
+      WHERE user_id = $1 AND folder_path = $2
+      ORDER BY created_at DESC
+    `, [userId, folderPath]);
+    return res.rows;
+  },
+
+  async getFilesByUserId(userId) {
+    const res = await pool.query(`
+      SELECT * FROM user_files
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+    `, [userId]);
+    return res.rows;
   }
 };
-
 module.exports = DocumentModel;

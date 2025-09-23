@@ -10,6 +10,7 @@ require('dotenv').config({ path: './.env' });
 const documentRoutes = require('./routes/documentRoutes');
 const chatRoutes = require('./routes/chatRoutes');
 const secretManagerRoutes = require('./routes/secretManagerRoutes');
+const fileRoutes = require('./routes/fileRoutes');
 
 const app = express();
 
@@ -61,6 +62,7 @@ app.use(cors({
 app.use('/api/doc', documentRoutes);
 app.use('/api/doc', chatRoutes);
 app.use('/api/doc', secretManagerRoutes);
+app.use('/api/files', fileRoutes);
 
 // Test route
 app.get('/api/test-route', (req, res) => {

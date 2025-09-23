@@ -1,0 +1,126 @@
+{
+  "info": {
+    "_postman_id": "YOUR_COLLECTION_ID",
+    "name": "Document Service API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_collection_link": "https://www.postman.com/collections/YOUR_COLLECTION_ID"
+  },
+  "item": [
+    {
+      "name": "Create Folder",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{YOUR_AUTH_TOKEN}}",
+            "type": "text",
+            "description": "User's authentication token"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"folderName\": \"MyNewFolder\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{BASE_URL}}/api/document-library/create",
+          "host": [
+            "{{BASE_URL}}"
+          ],
+          "path": [
+            "api",
+            "document-library",
+            "create"
+          ]
+        },
+        "description": "Creates a new folder. Replace `{{YOUR_AUTH_TOKEN}}` with a valid JWT and `MyNewFolder` with your desired folder name."
+      },
+      "response": []
+    },
+    {
+      "name": "Upload Documents to Folder",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{YOUR_AUTH_TOKEN}}",
+            "type": "text",
+            "description": "User's authentication token"
+          }
+        ],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "files",
+              "type": "file",
+              "src": "/path/to/your/file1.pdf",
+              "description": "Select one or more files to upload"
+            },
+            {
+              "key": "files",
+              "type": "file",
+              "src": "/path/to/your/file2.docx",
+              "description": "Select one or more files to upload"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{BASE_URL}}/api/document-library/:folderName/upload",
+          "host": [
+            "{{BASE_URL}}"
+          ],
+          "path": [
+            "api",
+            "document-library",
+            ":folderName",
+            "upload"
+          ],
+          "variable": [
+            {
+              "key": "folderName",
+              "value": "MyNewFolder",
+              "description": "Name of the folder to upload documents to"
+            }
+          ]
+        },
+        "description": "Uploads multiple documents to a specified folder. Replace `{{YOUR_AUTH_TOKEN}}` with a valid JWT and `:folderName` with the target folder name. Use the 'files' key in form-data to select files."
+      },
+      "response": []
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          ""
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "BASE_URL",
+      "value": "http://localhost:3000",
+      "type": "string",
+      "description": "Base URL of your document service"
+    }
+  ]
+}
