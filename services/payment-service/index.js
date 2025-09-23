@@ -6,12 +6,12 @@ const cookieParser = require('cookie-parser');
 require('dotenv').config({ path: './.env' });
 const db = require('./src/config/db'); // Import the database connection
 const paymentRoutes = require('./src/routes/paymentRoutes'); // Import payment routes
-
-
-
-
+const userResourceRoutes = require('./src/routes/userResourcesRoutes');
 
 const app = express();
+
+// Routes that need to be defined early (e.g., user resources)
+app.use('/api/user-resources', userResourceRoutes);
 
 // Middleware
 app.use(cookieParser());
@@ -38,7 +38,7 @@ app.use(cors({
 // ✅ Handle preflight requests for all routes
 // app.options('*', cors());
 
-// Routes
+// Other Routes
 app.use('/api/payments', paymentRoutes);
 
 
@@ -64,8 +64,6 @@ app.use((err, req, res, next) => {
       console.log(`✅ Server running on port ${PORT}`);
       console.log(`Application accessible at http://localhost:${PORT}`);
     });
-
-
 
 
 // Graceful shutdown

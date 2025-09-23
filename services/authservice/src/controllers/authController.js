@@ -212,4 +212,72 @@ const fetchProfile = async (req, res) => {
   }
 };
 
-module.exports = { register, login, updateProfile, deleteAccount, logout, fetchProfile };
+/**
+ * @description Fetches a user by their ID.
+ * @route GET /api/users/:userId
+ */
+const getUserById = async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.status(200).json({
+      message: 'User fetched successfully',
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        is_blocked: user.is_blocked,
+        phone: user.phone,
+        location: user.location,
+        created_at: user.created_at,
+        updated_at: user.updated_at,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching user by ID:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+/**
+ * @description Updates the Razorpay customer ID for a user.
+ * @route PUT /api/users/:id/razorpay-customer-id
+ */
+const updateRazorpayCustomerId = async (req, res) => {
+  const { id } = req.params;
+  const { razorpay_customer_id } = req.body;
+
+  try {
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const updatedUser = await User.update(id, { razorpay_customer_id });
+
+    res.status(200).json({
+      message: 'Razorpay customer ID updated successfully',
+      user: {
+        id: updatedUser.id,
+        username: updatedUser.username,
+        email: updatedUser.email,
+        role: updatedUser.role,
+        is_blocked: updatedUser.is_blocked,
+        phone: updatedUser.phone,
+        location: updatedUser.location,
+        razorpay_customer_id: updatedUser.razorpay_customer_id,
+      },
+    });
+  } catch (error) {
+    console.error('Error updating Razorpay customer ID:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+module.exports = { register, login, updateProfile, deleteAccount, logout, fetchProfile, getUserById, updateRazorpayCustomerId };

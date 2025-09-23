@@ -307,7 +307,6 @@
 
 // export default new ApiService();
 
-
 // src/services/api.js
 const API_BASE_URL =
   import.meta.env.VITE_APP_API_URL || "http://localhost:5000";
@@ -320,8 +319,7 @@ class ApiService {
   getAuthToken() {
     const token = localStorage.getItem("token");
     console.log(
-      "getAuthToken: Retrieved token:",
-      token ? "Present" : "Not Present"
+      `[ApiService] getAuthToken: Token ${token ? 'Present' : 'Not Present'}`
     );
     return token;
   }
@@ -334,6 +332,9 @@ class ApiService {
     const token = this.getAuthToken();
     const { responseType, ...fetchOptions } = options;
 
+    console.log(`[ApiService] Requesting URL: ${url}`);
+    console.log(`[ApiService] Request method: ${options.method || 'GET'}`);
+
     const headers = {
       ...(fetchOptions.body instanceof FormData
         ? {}
@@ -343,6 +344,9 @@ class ApiService {
 
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
+      console.log('[ApiService] Authorization header added.');
+    } else {
+      console.log('[ApiService] No token found, Authorization header NOT added.');
     }
 
     const config = {
@@ -438,7 +442,7 @@ class ApiService {
   }
 
   async openTemplateForEditing(templateId) {
-    return this.request(`http://localhost:5005/api/templates/${templateId}/open`);
+    return this.request(`/api/templates/${templateId}/open`);
   }
 
   async saveUserDraft(templateId, name, file) {
@@ -496,11 +500,11 @@ class ApiService {
   // ✅ Subscription Plans APIs
   // ========================
   async getPublicPlans() {
-    return this.request(`/plans/plans`);
+    return this.request(`/payments/plans`);
   }
 
   async startSubscription(plan_id) {
-    return this.request("/plans/subscription/start", {
+    return this.request("/payments/subscription/start", {
       method: "POST",
       body: JSON.stringify({ plan_id }),
     });
@@ -656,7 +660,7 @@ async fetchChatSessions() {
   // ✅ Support APIs
   // ========================
   async submitSupportQuery(queryData) {
-    return this.request("http://localhost:5000/support", {
+    return this.request("/support", {
       method: "POST",
       body: JSON.stringify(queryData),
     });

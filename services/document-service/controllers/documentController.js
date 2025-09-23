@@ -1,6 +1,7 @@
 const db = require("../config/db");
 const axios = require("axios"); // Import axios
 const DocumentModel = require("../models/documentModel");
+const File = require("../models/File"); // Import the File model
 const FileChunkModel = require("../models/FileChunk");
 const ChunkVectorModel = require("../models/ChunkVector");
 const ProcessingJobModel = require("../models/ProcessingJob");
@@ -961,5 +962,32 @@ exports.batchUploadDocument = async (req, res) => {
       error: "Failed to initiate batch processing",
       details: error.message,
     });
+  }
+};
+
+/**
+ * @description Retrieves the total storage utilization for the authenticated user.
+ * @route GET /api/doc/user-storage-utilization
+ */
+exports.getUserStorageUtilization = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    if (!userId) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+
+    const totalStorageUsedBytes = await File.getTotalStorageUsed(userId);
+    const totalStorageUsedGB = (totalStorageUsedBytes / (1024 * 1024 * 1024)).toFixed(2);
+
+    res.status(200).json({
+      storage: {
+        used_bytes: totalStorageUsedBytes,
+        used_gb: totalStorageUsedGB,
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching user storage utilization:', error);
+    res.status(500).json({ message: 'Internal server error', error: error.message });
   }
 };

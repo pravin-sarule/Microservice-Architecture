@@ -1,6 +1,7 @@
 const { verifyToken } = require('../utils/jwt');
 
 const authenticateToken = async (req, res, next) => {
+  console.log("DEBUG: authenticateToken - Middleware entered.");
   try {
     console.log("🔐 Checking token...");
     const authHeader = req.headers['authorization'];

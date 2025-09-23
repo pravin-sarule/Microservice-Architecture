@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const router = express.Router();
-
+const { protect } = require('../middleware/auth'); // Assuming auth middleware is available
 const controller = require('../../controllers/documentController');
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -29,5 +29,8 @@ router.get('/chat-history/:file_id', controller.getChatHistory);
 
 // Processing status
 router.get('/status/:file_id', controller.getDocumentProcessingStatus);
+
+// Get user storage utilization
+router.get('/user-storage-utilization', protect, controller.getUserStorageUtilization);
 
 module.exports = router;

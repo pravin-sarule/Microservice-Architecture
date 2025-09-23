@@ -117,6 +117,12 @@ router.use(
     pathRewrite: {
       "^/": "/api/doc/", // Rewrite /batch-upload to /api/doc/batch-upload
     },
+    onProxyReq: (proxyReq, req) => {
+      // Inject user ID from JWT into header for Document Service
+      if (req.user && req.user.id) {
+        proxyReq.setHeader("x-user-id", req.user.id);
+      }
+    },
     logLevel: "debug", // shows proxy details
     proxyTimeout: 60000,
     timeout: 60000,

@@ -5,7 +5,7 @@ const router = express.Router();
 // const auth = require('../middleware/auth'); // Import auth middleware
 const { protect } = require('../middleware/auth');
 
-const { register, login, updateProfile, deleteAccount, logout, fetchProfile } = require('../controllers/authController');
+const { register, login, updateProfile, deleteAccount, logout, fetchProfile, getUserById, updateRazorpayCustomerId } = require('../controllers/authController');
 
 // Register a new user
 router.post('/register', register);
@@ -26,5 +26,11 @@ router.post('/logout', protect, logout);
 
 // Fetch user profile
 router.get('/profile', protect, fetchProfile);
+
+// Fetch user by ID
+router.get('/users/:userId', protect, getUserById);
+
+// Update Razorpay customer ID
+router.put('/users/:id/razorpay-customer-id', protect, updateRazorpayCustomerId);
 
 module.exports = router;

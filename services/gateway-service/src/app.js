@@ -6,12 +6,15 @@ const dotenv = require("dotenv");
 
 dotenv.config();
 console.log(`[Gateway] PAYMENT_SERVICE_URL: ${process.env.PAYMENT_SERVICE_URL}`);
+console.log(`[Gateway] Gateway Port: ${process.env.PORT || 5000}`);
 
 const authProxy = require("./routes/authProxy");
 const fileProxy = require("./routes/fileProxy");
+// const paymentProxy = require("./routes/paymentProxy");
 const paymentProxy = require("./routes/paymentProxy");
 const supportProxy = require("./routes/supportProxy");
 const draftProxy = require("./routes/draftProxy");
+// const userResourcesProxy = require("./routes/userResourcesProxy");
 
 const app = express();
 
@@ -21,7 +24,7 @@ app.use(cors({
   origin: allowedOrigins,
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"]
+  allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization", "x-user-id"]
 }));
 
 // Simple logger to see incoming requests
@@ -38,9 +41,11 @@ app.get("/health", (req, res) => {
 // Mount proxies
 app.use(authProxy);
 app.use(fileProxy);
+// app.use(paymentProxy);
 app.use(paymentProxy);
 app.use("/support", supportProxy);
 app.use("/drafting", draftProxy);
+// app.use(userResourcesProxy);
 
 // Catch-all for 404 errors
 app.use((req, res, next) => {
