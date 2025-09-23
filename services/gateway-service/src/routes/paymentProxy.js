@@ -1,36 +1,4 @@
-// // src/routes/paymentProxy.js
-// const { createProxyMiddleware } = require("http-proxy-middleware");
-// const express = require("express");
-// const { authMiddleware } = require("../middlewares/authMiddleware");
 
-// const router = express.Router();
-
-// router.use("/payments", (req, res, next) => {
-//   console.log("Gateway received Payment request:", req.method, req.originalUrl);
-//   next();
-// });
-
-// // Proxy /payments/* → Payment Service /api/payments/*
-// router.use(
-//   "/payments",
-//   createProxyMiddleware({
-//     target: process.env.PAYMENT_SERVICE_URL || "http://localhost:5003",
-//     changeOrigin: true,
-//     pathRewrite: (path) => {
-//       // Inside the router mounted at /payments, path is already "/plans" etc.
-//       const rewritten = path.replace(/^\/?/, "/api/payments/"); 
-//       console.log(`[Gateway] Rewriting path: ${path} -> ${rewritten}`);
-//       return rewritten;
-//     },
-//     logLevel: "debug",
-//     onError: (err, req, res) => {
-//       console.error("Payment service proxy error:", err.message);
-//       res.status(500).json({ error: "Payment Service is unavailable" });
-//     },
-//   })
-// );
-
-// module.exports = router;
 
 
 
