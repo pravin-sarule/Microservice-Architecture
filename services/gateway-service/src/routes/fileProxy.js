@@ -45,7 +45,7 @@ router.use(
 router.use(
   "/docs",
   createProxyMiddleware({
-    target: process.env.FILE_SERVICE_URL || "http://localhost:5002",
+    target: process.env.FILE_SERVICE_URL || "https://document-service-hnk7.onrender.com",
     changeOrigin: true,
     pathRewrite: {
       "^/": "/api/files/", // Rewrite /batch-upload to /api/doc/batch-upload

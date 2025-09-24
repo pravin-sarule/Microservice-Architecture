@@ -37,19 +37,27 @@ app.use(morgan('dev'));
 // }));
 
 // ✅ CORS configuration
-const allowedOrigins = ["http://localhost:5173"];
+// const allowedOrigins = ["http://localhost:5173"];
+// app.use(cors({
+//   origin: function (origin, callback) {
+//     if (!origin) return callback(null, true);
+//     if (allowedOrigins.includes(origin)) {
+//       return callback(null, true);
+//     }
+//     return callback(new Error("Not allowed by CORS"));
+//   },
+//   credentials: true,
+//   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+//   allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"],
+// }));
+
+// --------- CORS Setup ---------
+const allowedOrigins = ["https://nexintel.netlify.app"];
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    return callback(new Error("Not allowed by CORS"));
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"],
+  origin: allowedOrigins,
+  credentials: true, // Allow cookies/Authorization header
 }));
+
 
 // ✅ Handle preflight
 // app.options("*", cors());
