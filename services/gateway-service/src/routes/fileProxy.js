@@ -1,70 +1,6 @@
 
 
 
-// const { createProxyMiddleware } = require("http-proxy-middleware");
-// const express = require("express");
-// const { authMiddleware } = require("../middlewares/authMiddleware");
-
-// const router = express.Router();
-
-// // Debug log before proxying
-// router.use("/files", (req, res, next) => {
-//   console.log("Gateway received:", req.method, req.originalUrl);
-//   next();
-// });
-
-// // Protect all /files and /docs routes with JWT
-// router.use("/files", authMiddleware);
-// router.use("/docs", authMiddleware);
-
-// // Proxy: /files/* → File Service /api/doc/*
-// router.use(
-//   "/files",
-//   createProxyMiddleware({
-//     target: process.env.FILE_SERVICE_URL || "https://document-service-hnk7.onrender.com",
-//     changeOrigin: true,
-//     pathRewrite: { "^/files": "/api/doc" },
-//     onProxyReq: (proxyReq, req) => {
-//       if (req.user && req.user.id) {
-//         proxyReq.setHeader("x-user-id", req.user.id);
-//       }
-//     },
-//     logLevel: "debug",
-//     proxyTimeout: 60000,
-//     timeout: 60000,
-//     onError: (err, req, res) => {
-//       console.error("File service proxy error:", err.message);
-//       res.status(500).json({ error: "File Service is unavailable" });
-//     },
-//   })
-// );
-
-// // Proxy: /docs/* → File Service /api/files/*
-// router.use(
-//   "/docs",
-//   createProxyMiddleware({
-//     target: process.env.FILE_SERVICE_URL || "https://document-service-hnk7.onrender.com",
-//     changeOrigin: true,
-//     pathRewrite: { "^/docs": "/api/files" },
-//     onProxyReq: (proxyReq, req) => {
-//       if (req.user && req.user.id) {
-//         proxyReq.setHeader("x-user-id", req.user.id);
-//       }
-//     },
-//     logLevel: "debug",
-//     proxyTimeout: 60000,
-//     timeout: 60000,
-//     onError: (err, req, res) => {
-//       console.error("File service proxy error:", err.message);
-//       res.status(500).json({ error: "File Service is unavailable" });
-//     },
-//   })
-// );
-
-// module.exports = router;
-
-
-// src/routes/fileProxy.js
 const { createProxyMiddleware } = require("http-proxy-middleware");
 const express = require("express");
 const { authMiddleware } = require("../middlewares/authMiddleware");
@@ -72,13 +8,14 @@ const { authMiddleware } = require("../middlewares/authMiddleware");
 const router = express.Router();
 
 // Debug log before proxying
-router.use(["/files", "/docs"], (req, res, next) => {
+router.use("/files", (req, res, next) => {
   console.log("Gateway received:", req.method, req.originalUrl);
   next();
 });
 
 // Protect all /files and /docs routes with JWT
-router.use(["/files", "/docs"], authMiddleware);
+router.use("/files", authMiddleware);
+router.use("/docs", authMiddleware);
 
 // Proxy: /files/* → File Service /api/doc/*
 router.use(
@@ -86,7 +23,7 @@ router.use(
   createProxyMiddleware({
     target: process.env.FILE_SERVICE_URL || "https://document-service-hnk7.onrender.com",
     changeOrigin: true,
-    pathRewrite: (path, req) => path.replace(/^\/files/, "/api/doc"),
+    pathRewrite: { "^/files": "/api/doc" },
     onProxyReq: (proxyReq, req) => {
       if (req.user && req.user.id) {
         proxyReq.setHeader("x-user-id", req.user.id);
@@ -108,7 +45,7 @@ router.use(
   createProxyMiddleware({
     target: process.env.FILE_SERVICE_URL || "https://document-service-hnk7.onrender.com",
     changeOrigin: true,
-    pathRewrite: (path, req) => path.replace(/^\/docs/, "/api/files"),
+    pathRewrite: { "^/docs": "/api/files" },
     onProxyReq: (proxyReq, req) => {
       if (req.user && req.user.id) {
         proxyReq.setHeader("x-user-id", req.user.id);
@@ -118,8 +55,8 @@ router.use(
     proxyTimeout: 60000,
     timeout: 60000,
     onError: (err, req, res) => {
-      console.error("Docs service proxy error:", err.message);
-      res.status(500).json({ error: "Docs Service is unavailable" });
+      console.error("File service proxy error:", err.message);
+      res.status(500).json({ error: "File Service is unavailable" });
     },
   })
 );
