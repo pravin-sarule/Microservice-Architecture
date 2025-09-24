@@ -99,11 +99,6 @@ app.use(cors({
   allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization", "x-user-id"]
 }));
 
-// ✅ Handle preflight requests
-app.options("*", cors({
-  origin: allowedOrigins,
-  credentials: true
-}));
 
 // Simple logger to see incoming requests
 app.use((req, res, next) => {
