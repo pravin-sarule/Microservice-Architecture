@@ -142,6 +142,7 @@ exports.getTemplateById = async (req, res) => {
 exports.getDocxTemplatePreview = async (req, res) => {
   try {
     const { id } = req.params;
+    console.log(`[getDocxTemplatePreview] Attempting to fetch preview for template ID: ${id}`);
 
     // We can remove the userId check if this is a public preview endpoint.
     // If authorization is required, keep the check.
@@ -151,18 +152,23 @@ exports.getDocxTemplatePreview = async (req, res) => {
     const { rows } = await pool.query('SELECT gcs_path FROM templates WHERE id = $1 AND status = \'active\'', [id]);
     
     if (!rows.length) {
+      console.warn(`[getDocxTemplatePreview] Template with ID ${id} not found or not active.`);
       return res.status(404).json({ message: 'Template not found' });
     }
+    console.log(`[getDocxTemplatePreview] Found template with GCS path: ${rows[0].gcs_path}`);
 
     const srcKey = normalizeGcsKey(rows[0].gcs_path);
     if (!srcKey) {
+      console.error(`[getDocxTemplatePreview] Invalid GCS path for template ID ${id}: ${rows[0].gcs_path}`);
       return res.status(500).json({ message: 'Template has an invalid GCS path' });
     }
+    console.log(`[getDocxTemplatePreview] Normalized GCS key: ${srcKey}. Starting stream.`);
 
     // --- CHANGE: From downloading to streaming ---
 
     // 1. Set the correct headers before starting the stream.
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `inline; filename="preview.docx"`);
 
     // 2. Create a read stream from the GCS file.
     const readStream = storage.bucket(BUCKET_NAME).file(srcKey).createReadStream();

@@ -430,19 +430,19 @@ class ApiService {
   // ✅ Template APIs
   // ========================
   async getTemplates() {
-    return this.request("/templates");
+    return this.request("/drafting");
   }
 
   async getUserTemplates() {
-    return this.request("/templates/user");
+    return this.request("/drafting/user");
   }
 
   async getTemplateById(id) {
-    return this.request(`/templates/${id}`);
+    return this.request(`/drafting/${id}`);
   }
 
   async openTemplateForEditing(templateId) {
-    return this.request(`/api/templates/${templateId}/open`);
+    return this.request(`/drafting/${templateId}/open`);
   }
 
   async saveUserDraft(templateId, name, file) {

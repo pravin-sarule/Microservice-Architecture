@@ -880,7 +880,7 @@ import React, { useState, useEffect } from "react";
 // Import the CKEditor component
 import { CKEditor } from "@ckeditor/ckeditor5-react";
 // IMPORT YOUR CUSTOM EDITOR BUILD INSTEAD OF THE NPM PACKAGE
-import ClassicEditor from "../path/to/your/build/ckeditor"; 
+import ClassicEditor from "@ckeditor/ckeditor5-build-classic";
 import ApiService from "../services/api";
 // The same CSS file works perfectly with this new setup
 import "./RichTextEditor.css"; 
@@ -914,14 +914,23 @@ const RichTextEditor = ({
       <CKEditor
         editor={ClassicEditor}
         data={editorData}
+        onReady={(editor) => {
+          // Access the editor's main editable element, which is inside an iframe.
+          const editableElement = editor.ui.view.editable.element;
+          if (editableElement && editableElement.ownerDocument && editableElement.ownerDocument.defaultView) {
+            const iframe = editableElement.ownerDocument.defaultView.frameElement;
+            if (iframe && iframe.sandbox) {
+              // Add 'allow-scripts' to the existing sandbox attributes
+              iframe.sandbox.add('allow-scripts');
+            }
+          }
+        }}
         onChange={(event, editor) => {
           const data = editor.getData();
           onChange(data);
         }}
         config={{
           placeholder: placeholder,
-          // The toolbar configuration is now handled by your custom build,
-          // but you can still override it here if needed.
         }}
       />
     </div>

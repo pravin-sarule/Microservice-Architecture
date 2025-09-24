@@ -15,6 +15,7 @@ router.get('/user', protect, templateController.getUserTemplates);
 
 // DOCX to HTML preview route
 router.get('/:id/html', protect, templateController.openDocxTemplateAsHtml);
+router.get('/:id/preview-docx', protect, templateController.getDocxTemplatePreview);
 
 // User draft routes
 // router.post('/draft', protect, upload.single('file'), templateController.saveUserDraft);

@@ -57,7 +57,7 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 
 // ✅ CORS configuration
-const allowedOrigins = ["http://localhost:5173"];
+const allowedOrigins = ["https://nexintel.netlify.app/"];
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);

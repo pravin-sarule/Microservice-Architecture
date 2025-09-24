@@ -10,6 +10,9 @@ const upload = multer({ storage: multer.memoryStorage() });
 // Create folder
 router.post("/create-folder", authMiddleware.protect, fileController.createFolder);
 
+// Get all folders for a user
+router.get("/folders", authMiddleware.protect, fileController.getFolders);
+
 // Upload multiple docs to folder
 router.post("/:folderName/upload", authMiddleware.protect, upload.array("files", 10), fileController.uploadDocuments);
 
@@ -24,5 +27,20 @@ router.get("/:folderName/status", authMiddleware.protect, fileController.getFold
 
 // NEW ROUTES - Query documents in folder (like Claude AI project modules)
 router.post("/:folderName/query", authMiddleware.protect, fileController.queryFolderDocuments);
+
+
+// ============ NEW CHAT SESSION ROUTES ============
+// Get all chat sessions for a folder (with previews and metadata)
+router.get("/:folderName/sessions", authMiddleware.protect, fileController.getFolderChatSessions);
+
+// Get specific chat session with complete conversation history (reopen session)
+router.get("/:folderName/sessions/:sessionId", authMiddleware.protect, fileController.getFolderChatSessionById);
+
+// Continue conversation in existing chat session (add new message)
+router.post("/:folderName/sessions/:sessionId/continue", authMiddleware.protect, fileController.continueFolderChat);
+
+// Delete entire chat session
+router.delete("/:folderName/sessions/:sessionId", authMiddleware.protect, fileController.deleteFolderChatSession);
+
 
 module.exports = router;
