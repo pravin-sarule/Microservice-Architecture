@@ -57,10 +57,24 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 
 // ✅ CORS configuration
-const allowedOrigins = ["https://nexintel.netlify.app/"];
+// const allowedOrigins = ["https://nexintel.netlify.app/"];
+// app.use(cors({
+//   origin: function (origin, callback) {
+//     if (!origin) return callback(null, true);
+//     if (allowedOrigins.includes(origin)) {
+//       return callback(null, true);
+//     }
+//     return callback(new Error("Not allowed by CORS"));
+//   },
+//   credentials: true,
+//   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+//   allowedHeaders: ["Origin", "X-Requested-With", "Content-Type", "Accept", "Authorization"],
+// }));
+const allowedOrigins = ["https://nexintel.netlify.app"]; // no trailing slash
+
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
+    if (!origin) return callback(null, true); // allow non-browser requests like Postman
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
