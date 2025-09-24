@@ -17,22 +17,27 @@
 
 // module.exports = router;
 
+
 const { createProxyMiddleware } = require("http-proxy-middleware");
 const express = require("express");
-
 const router = express.Router();
+
+const targetAuth = process.env.AUTH_SERVICE_URL || "https://auth-service-w1eg.onrender.com";
 
 router.use(
   "/auth",
   createProxyMiddleware({
-    target: process.env.AUTH_SERVICE_URL || "https://auth-service-w1eg.onrender.com",
+    target: targetAuth,
     changeOrigin: true,
     pathRewrite: {
-      "^/auth": "", // remove /auth from frontend request
+      "^/auth": "", // remove /auth from the URL, forward as /api/auth/login
+    },
+    onProxyReq: (proxyReq, req, res) => {
+      console.log("[GATEWAY] Proxying to:", targetAuth + proxyReq.path);
     },
     onError: (err, req, res) => {
-      console.error("Proxy error:", err.message);
-      res.status(502).json({ error: "Bad Gateway", details: err.message });
+      console.error("[GATEWAY] Proxy error:", err.message);
+      res.status(502).send("Bad Gateway - auth service unreachable");
     },
   })
 );
