@@ -99,7 +99,7 @@ router.use("/", authMiddleware); // Apply to all routes under /drafting
 router.use(
   "/", // Listen for root of mounted path (/drafting)
   createProxyMiddleware({
-    target: process.env.DRAFTING_SERVICE_URL || "http://localhost:5005",
+    target: process.env.DRAFTING_SERVICE_URL || "https://drafting-service.onrender.com",
     changeOrigin: true,
     pathRewrite: {
       "^/": "/api/templates/", // maps / → /api/templates/
