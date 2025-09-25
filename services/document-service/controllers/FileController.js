@@ -17,8 +17,9 @@ const FolderChat = require("../models/FolderChat");
 // Services
 const {
   uploadToGCS,
-  getSignedUrl,
+  getSignedUrl: getSignedUrlFromGCS, // Renamed to avoid conflict
 } = require("../services/gcsService");
+const { getSignedUrl } = require("../services/folderService"); // Import from folderService
 const { checkStorageLimit } = require("../utils/storage");
 const { bucket } = require("../config/gcs");
 const { askGemini, getSummaryFromChunks } = require("../services/aiService");
@@ -116,26 +117,69 @@ async function processDocumentWithAI(fileId, fileBuffer, mimetype, userId, origi
 }
 
 /* ----------------- Create Folder ----------------- */
+// exports.createFolder = async (req, res) => {
+//   try {
+//     const { folderName } = req.body;
+//     const userId = req.user.id;
+
+//     if (!folderName) return res.status(400).json({ error: "Folder name is required" });
+
+//     const safeFolderName = sanitizeName(folderName);
+//     const gcsPath = `${userId}/documents/${safeFolderName}/`;
+
+//     await uploadToGCS(".keep", Buffer.from(""), gcsPath, false, "text/plain");
+
+//     const folder = await File.create({
+//       user_id: userId,
+//       originalname: safeFolderName,
+//       gcs_path: gcsPath,
+//       mimetype: 'folder/x-directory',
+//       is_folder: true,
+//       status: "processed",
+//       processing_progress: 100,
+//     });
+
+//     return res.status(201).json({ message: "Folder created", folder });
+//   } catch (error) {
+//     console.error("❌ createFolder error:", error);
+//     res.status(500).json({ error: "Internal server error", details: error.message });
+//   }
+// };
 exports.createFolder = async (req, res) => {
   try {
-    const { folderName } = req.body;
+    const { folderName, parentPath = '' } = req.body; // allow parent folder
     const userId = req.user.id;
 
-    if (!folderName) return res.status(400).json({ error: "Folder name is required" });
+    if (!folderName) {
+      return res.status(400).json({ error: "Folder name is required" });
+    }
 
-    const safeFolderName = sanitizeName(folderName);
-    const gcsPath = `${userId}/documents/${safeFolderName}/`;
+    // Sanitize folder and parent names
+    const cleanParentPath = parentPath ? parentPath.replace(/^\/+|\/+$/g, '') : '';
+    const safeFolderName = sanitizeName(folderName.replace(/^\/+|\/+$/g, ''));
 
+    // Construct full folder path
+    const folderPath = cleanParentPath
+      ? `${cleanParentPath}/${safeFolderName}`
+      : safeFolderName;
+
+    // GCS path for the folder
+    const gcsPath = `${userId}/documents/${folderPath}/`;
+
+    // Create placeholder file in GCS
     await uploadToGCS(".keep", Buffer.from(""), gcsPath, false, "text/plain");
 
+    // Save folder record in DB
     const folder = await File.create({
       user_id: userId,
       originalname: safeFolderName,
       gcs_path: gcsPath,
+      folder_path: cleanParentPath || null,
       mimetype: 'folder/x-directory',
       is_folder: true,
       status: "processed",
       processing_progress: 100,
+      size: 0,
     });
 
     return res.status(201).json({ message: "Folder created", folder });
@@ -146,25 +190,83 @@ exports.createFolder = async (req, res) => {
 };
 
 /* ----------------- Get All Folders for a User ----------------- */
-exports.getFolders = async (req, res) => {
+// exports.getFolders = async (req, res) => {
+//   try {
+//     const userId = req.user.id;
+
+//     const allFilesAndFolders = await File.findByUserId(userId);
+//     const folders = allFilesAndFolders.filter(item => item.is_folder);
+
+//     return res.json({
+//       success: true,
+//       folders: folders.map(folder => ({
+//         id: folder.id,
+//         name: folder.originalname,
+//         gcsPath: folder.gcs_path,
+//         createdAt: folder.created_at,
+//       })),
+//     });
+//   } catch (error) {
+//     console.error("❌ getFolders error:", error);
+//     res.status(500).json({ error: "Failed to fetch folders", details: error.message });
+//   }
+// };
+exports .getFolders = async (req, res) => {
   try {
     const userId = req.user.id;
+    const files = await File.findByUserId(userId);
 
-    const allFilesAndFolders = await File.findByUserId(userId);
-    const folders = allFilesAndFolders.filter(item => item.is_folder);
-
-    return res.json({
-      success: true,
-      folders: folders.map(folder => ({
+    // Separate folders and files
+    const folders = files
+      .filter(file => file.is_folder)
+      .map(folder => ({
         id: folder.id,
         name: folder.originalname,
-        gcsPath: folder.gcs_path,
-        createdAt: folder.created_at,
-      })),
+        folder_path: folder.folder_path,
+        created_at: folder.created_at,
+      }));
+
+    const actualFiles = files.filter(file => !file.is_folder);
+
+    // Generate signed URLs for files
+    const signedFiles = await Promise.all(
+      actualFiles.map(async (file) => {
+        let signedUrl = null;
+        try {
+          signedUrl = await getSignedUrl(file.gcs_path);
+        } catch (err) {
+          console.error('Error generating signed URL:', err);
+        }
+        return {
+          id: file.id,
+          name: file.originalname,
+          size: file.size,
+          mimetype: file.mimetype,
+          created_at: file.created_at,
+          folder_path: file.folder_path,
+          url: signedUrl,
+        };
+      })
+    );
+
+    // Optionally: organize files under their folders
+    const folderMap = {};
+    folders.forEach(folder => {
+      folder.children = [];
+      folderMap[folder.folder_path ? folder.folder_path + '/' + folder.name : folder.name] = folder;
     });
+
+    signedFiles.forEach(file => {
+      const parentFolderKey = file.folder_path || '';
+      if (folderMap[parentFolderKey]) {
+        folderMap[parentFolderKey].children.push(file);
+      }
+    });
+
+    return res.status(200).json({ folders });
   } catch (error) {
-    console.error("❌ getFolders error:", error);
-    res.status(500).json({ error: "Failed to fetch folders", details: error.message });
+    console.error('Error fetching user files and folders:', error);
+    return res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -750,9 +852,9 @@ exports.getFolderChatSessionById = async (req, res) => {
       chatHistory: chatHistory.map(chat => ({
         id: chat.id,
         question: chat.question,
-        response: chat.response,
+        response: chat.answer, // Changed from chat.response to chat.answer
         timestamp: chat.created_at,
-        documentIds: chat.document_ids ? JSON.parse(chat.document_ids) : []
+        documentIds: chat.summarized_file_ids || [] // Changed from chat.document_ids to chat.summarized_file_ids
       })),
       documentsInFolder: processedFiles.map(f => ({
         id: f.id,
@@ -788,10 +890,15 @@ exports.getFolderChatSessions = async (req, res) => {
       order: [["created_at", "ASC"]],
     });
 
+    // If no chat history, return an empty sessions array instead of 404
     if (!chatHistory.length) {
-      return res.status(404).json({
-        error: "No chat sessions found for this folder",
-        folderName
+      return res.status(200).json({
+        success: true,
+        folderName,
+        sessions: [],
+        documentsInFolder: [], // No documents if no chats
+        totalSessions: 0,
+        totalMessages: 0
       });
     }
 
@@ -807,9 +914,9 @@ exports.getFolderChatSessions = async (req, res) => {
       sessions[chat.session_id].messages.push({
         id: chat.id,
         question: chat.question,
-        response: chat.response,
+        response: chat.answer, // Changed from chat.response to chat.answer
         timestamp: chat.created_at,
-        documentIds: chat.document_ids ? JSON.parse(chat.document_ids) : []
+        documentIds: chat.summarized_file_ids || [] // Changed from chat.document_ids to chat.summarized_file_ids
       });
     });
 
@@ -855,10 +962,10 @@ exports.continueFolderChat = async (req, res) => {
 
     // Verify session exists and get chat history
     const existingChats = await FolderChat.findAll({
-      where: { 
-        user_id: userId, 
-        folder_id: folderName,
-        session_id: sessionId 
+      where: {
+        user_id: userId,
+        folder_name: folderName, // Changed from folder_id to folder_name
+        session_id: sessionId
       },
       order: [["created_at", "ASC"]],
     });
@@ -1082,10 +1189,10 @@ exports.deleteFolderChatSession = async (req, res) => {
 
     // Delete all messages in this session
     const deletedCount = await FolderChat.destroy({
-      where: { 
-        user_id: userId, 
-        folder_id: folderName,
-        session_id: sessionId 
+      where: {
+        user_id: userId,
+        folder_name: folderName, // Changed from folder_id to folder_name
+        session_id: sessionId
       }
     });
 

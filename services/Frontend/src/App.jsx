@@ -5,6 +5,7 @@ import 'react-toastify/dist/ReactToastify.css';
 import MainLayout from './layouts/MainLayout';
 import DashboardPage from './pages/DashboardPage';
 import DocumentUploadPage from './pages/DocumentUploadPage';
+import FolderDetailPage from './pages/FolderDetailPage'; // New import
 import EvidenceMatrixPage from './pages/EvidenceMatrixPage';
 import TimelinePage from './pages/TimelinePage';
 import GroundSummaryPage from './pages/GroundSummaryPage';
@@ -43,11 +44,21 @@ function App() {
             <Route path="/about-nexintel" element={<PublicLayout><AboutNexintelPage /></PublicLayout>} /> {/* New route for About Nexintel */}
             <Route path="/dashboard" element={<AuthChecker><MainLayout><DashboardPage /></MainLayout></AuthChecker>} />
             <Route
-              path="/upload"
+              path="/documents" // Changed route to /documents
               element={
                 <AuthChecker>
                   <MainLayout>
                     <DocumentUploadPage />
+                  </MainLayout>
+                </AuthChecker>
+              }
+            />
+            <Route
+              path="/documents/:folderName" // New route for FolderDetailPage
+              element={
+                <AuthChecker>
+                  <MainLayout>
+                    <FolderDetailPage />
                   </MainLayout>
                 </AuthChecker>
               }

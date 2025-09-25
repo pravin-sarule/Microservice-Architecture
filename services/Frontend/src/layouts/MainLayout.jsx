@@ -9,7 +9,7 @@ const MainLayout = ({ children }) => {
   const pageSubtitle = `This is the ${pageTitle} page.`;
 
   return (
-    <div className="flex h-screen bg-gray-100">
+    <div className="flex h-screen">
       {!isSidebarHidden && <Sidebar />}
       <MainContent pageTitle={pageTitle} pageSubtitle={pageSubtitle}>
         {children}

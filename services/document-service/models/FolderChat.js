@@ -71,6 +71,48 @@ const FolderChat = {
     const res = await pool.query(query, [userId]);
     return res.rows;
   },
+
+  async findAll(options = {}) {
+    let query = `
+      SELECT id, user_id, folder_name, question, answer, session_id, summarized_file_ids, created_at
+      FROM folder_chats
+    `;
+    const params = [];
+    const whereClauses = [];
+    let paramIndex = 1;
+
+    if (options.where) {
+      if (options.where.user_id) {
+        whereClauses.push(`user_id = $${paramIndex++}`);
+        params.push(options.where.user_id);
+      }
+      if (options.where.folder_name) {
+        whereClauses.push(`folder_name = $${paramIndex++}`);
+        params.push(options.where.folder_name);
+      }
+      if (options.where.session_id) {
+        whereClauses.push(`session_id = $${paramIndex++}::uuid`);
+        params.push(options.where.session_id);
+      }
+    }
+
+    if (whereClauses.length > 0) {
+      query += ` WHERE ${whereClauses.join(' AND ')}`;
+    }
+
+    if (options.order && Array.isArray(options.order) && options.order.length > 0) {
+      const orderByClauses = options.order.map(o => {
+        const [field, direction] = o;
+        return `${field} ${direction.toUpperCase()}`;
+      });
+      query += ` ORDER BY ${orderByClauses.join(', ')}`;
+    } else {
+      query += ` ORDER BY created_at ASC`; // Default order
+    }
+
+    const res = await pool.query(query, params);
+    return res.rows;
+  },
 };
 
 module.exports = FolderChat;

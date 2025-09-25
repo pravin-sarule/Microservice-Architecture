@@ -271,15 +271,9 @@ const Sidebar = () => {
   const navigationItems = [
     { name: 'Dashboard', path: '/dashboard', icon: ChartBarIcon },
     {
-      name: 'Document Upload',
-      path: '/upload',
+      name: 'Projects', // Changed name to Projects
+      path: '/documents', // Changed path to /documents
       icon: DocumentTextIcon,
-      hasSubMenu: true,
-      subMenu: [
-        { name: 'Create Folder', path: '/upload', action: 'create_folder' },
-        { name: 'Upload Files', path: '/upload', action: 'upload_files' },
-        { name: 'Upload Folder', path: '/upload', action: 'upload_folder' },
-      ]
     },
     { name: 'ICOM', path: '/analysis', icon: MagnifyingGlassCircleIcon },
     { name: 'Chats', path: '/chats', icon: MessageSquare, isSpecial: true }, // Mark as special for custom handling
@@ -434,15 +428,8 @@ const Sidebar = () => {
                       )}
                     </Link>
                   ) : (
-                    <button
-                      onClick={() => {
-                        if (isDocumentUpload) {
-                          setIsDocumentUploadOpen(prev => !prev);
-                          navigate(item.path);
-                        } else {
-                          navigate(item.path);
-                        }
-                      }}
+                    <Link
+                      to={item.path}
                       className={`group flex items-center w-full ${isSidebarCollapsed && !isMobileView ? 'justify-center px-2' : 'px-3'} py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${
                         active
                           ? 'bg-gray-100 text-gray-900 border border-gray-200'
@@ -460,78 +447,10 @@ const Sidebar = () => {
                       <span className={`${isSidebarCollapsed && !isMobileView ? 'hidden' : 'inline'} transition-all duration-200`}>
                         {item.name}
                       </span>
-                      {isDocumentUpload && (!isSidebarCollapsed || isMobileView) && (
-                        <div className="ml-auto">
-                          {isDocumentUploadOpen ? (
-                            <ChevronDown className="h-4 w-4 text-gray-500" />
-                          ) : (
-                            <ChevronRight className="h-4 w-4 text-gray-500" />
-                          )}
-                        </div>
-                      )}
-                      {active && !isDocumentUpload && (!isSidebarCollapsed || isMobileView) && (
+                      {active && (!isSidebarCollapsed || isMobileView) && (
                         <div className="ml-auto w-2 h-2 bg-indigo-600 rounded-full"></div>
                       )}
-                    </button>
-                  )}
-
-                  {/* Submenu - Only show if it's Document Upload and submenu is open and not collapsed */}
-                  {isDocumentUpload && isDocumentUploadOpen && (!isSidebarCollapsed || isMobileView) && (
-                    <div className="ml-8 mt-1 space-y-1">
-                      {item.subMenu.map((subItem) => (
-                        <button
-                          key={subItem.name}
-                          onClick={() => {
-                            if (subItem.action === 'create_folder') {
-                              setShowNewFolderInput(!showNewFolderInput);
-                            } else if (subItem.action === 'upload_files') {
-                              fileInputRef.current?.click();
-                            } else if (subItem.action === 'upload_folder') {
-                              folderInputRef.current?.click();
-                            }
-                          }}
-                          className="group flex items-center w-full px-3 py-2 text-sm font-medium rounded-lg transition-all duration-200 text-gray-700 hover:bg-gray-100 hover:text-gray-900"
-                        >
-                          {subItem.action === 'create_folder' && <PlusIcon className="h-4 w-4 mr-2 text-gray-500" />}
-                          {subItem.action === 'upload_files' && <FileUp className="h-4 w-4 mr-2 text-gray-500" />}
-                          {subItem.action === 'upload_folder' && <FolderPlus className="h-4 w-4 mr-2 text-gray-500" />}
-                          <span className="flex-1 text-left">{subItem.name}</span>
-                        </button>
-                      ))}
-                      
-                      {/* New Folder Input within Sidebar */}
-                      {showNewFolderInput && (
-                        <div className="px-3 py-2 bg-gray-100 rounded-lg">
-                          <input
-                            type="text"
-                            placeholder="Folder name"
-                            value={newFolderName}
-                            onChange={(e) => setNewFolderName(e.target.value)}
-                            className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:outline-none focus:border-indigo-500 bg-white text-gray-900"
-                            onKeyPress={(e) => e.key === 'Enter' && createFolder()}
-                            autoFocus
-                          />
-                          <div className="flex gap-2 mt-2">
-                            <button
-                              onClick={createFolder}
-                              disabled={creatingFolder}
-                              className="flex-1 bg-indigo-600 text-white text-xs py-1.5 px-3 rounded hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-                            >
-                              {creatingFolder ? 'Creating...' : 'Create'}
-                            </button>
-                            <button
-                              onClick={() => {
-                                setShowNewFolderInput(false);
-                                setNewFolderName('');
-                              }}
-                              className="flex-1 bg-gray-200 text-gray-700 text-xs py-1.5 px-3 rounded hover:bg-gray-300 transition-colors"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    </Link>
                   )}
                 </div>
               );
