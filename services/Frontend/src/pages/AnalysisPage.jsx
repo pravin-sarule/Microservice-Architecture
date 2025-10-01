@@ -110,7 +110,7 @@ const AnalysisPage = () => {
  const responseRef = useRef(null);
 
  // API Configuration - CORRECTED
- const API_BASE_URL = 'http://localhost:5000';
+ const API_BASE_URL = 'https://gateway-service-110685455967.asia-south1.run.app';
  
  // Get auth token with comprehensive fallback options
  const getAuthToken = () => {

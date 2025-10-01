@@ -676,7 +676,7 @@ const FolderContent = ({ onDocumentClick }) => {
   const checkProcessingStatus = async (documentId) => {
     try {
       const response = await fetch(
-        `http://localhost:5000/docs/status/${documentId}`,
+        `https://gateway-service-110685455967.asia-south1.run.app/docs/status/${documentId}`,
         {
           method: "GET",
           headers: {
@@ -850,7 +850,7 @@ const FolderContent = ({ onDocumentClick }) => {
       });
 
       const response = await fetch(
-        `http://localhost:5000/docs/${encodeURIComponent(selectedFolder)}/upload`,
+        `https://gateway-service-110685455967.asia-south1.run.app/docs/${encodeURIComponent(selectedFolder)}/upload`,
         {
           method: "POST",
           headers: {
