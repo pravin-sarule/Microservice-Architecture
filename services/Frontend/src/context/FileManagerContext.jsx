@@ -1,19 +1,19 @@
 import React, { createContext, useState, useEffect, useCallback, useMemo, useContext } from 'react';
-import { documentApi } from '../services/documentApi'; // Import the new API service
+import documentApi from '../services/documentApi';
 
 export const FileManagerContext = createContext();
 
 export const FileManagerProvider = ({ children }) => {
   const [folders, setFolders] = useState([]);
-  const [selectedFolder, setSelectedFolder] = useState(null); // Stores folder name
-  const [documents, setDocuments] = useState([]); // Files within the selected folder
-  const [chatSessions, setChatSessions] = useState([]); // Chat sessions for the selected folder
-  const [selectedChatSessionId, setSelectedChatSessionId] = useState(null); // Active chat session ID
+  const [selectedFolder, setSelectedFolder] = useState(null);
+  const [documents, setDocuments] = useState([]);
+  const [chatSessions, setChatSessions] = useState([]);
+  const [selectedChatSessionId, setSelectedChatSessionId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [hasAiResponse, setHasAiResponse] = useState(false); // New state for AI response
 
-  // Auto-clear messages after 5 seconds
   useEffect(() => {
     if (error) {
       const timer = setTimeout(() => setError(''), 5000);
@@ -28,18 +28,12 @@ export const FileManagerProvider = ({ children }) => {
     }
   }, [success]);
 
-  // Load user files/folders on component mount
-  useEffect(() => {
-    loadFoldersAndFiles();
-  }, []);
-
   const loadFoldersAndFiles = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
       const data = await documentApi.getFoldersAndFiles();
-      setFolders(data.folders);
-      // If a folder is already selected, update its documents
+      setFolders(data.folders || []);
       if (selectedFolder) {
         const currentFolder = data.folders.find(f => f.name === selectedFolder);
         setDocuments(currentFolder ? currentFolder.children || [] : []);
@@ -59,7 +53,7 @@ export const FileManagerProvider = ({ children }) => {
     try {
       await documentApi.createFolder(folderName);
       setSuccess('Folder created successfully');
-      await loadFoldersAndFiles(); // Refresh folders after creation
+      await loadFoldersAndFiles();
     } catch (err) {
       setError(`Error creating folder: ${err.response?.data?.details || err.message}`);
       console.error('Error creating folder:', err);
@@ -71,7 +65,7 @@ export const FileManagerProvider = ({ children }) => {
     try {
       await documentApi.uploadDocuments(folderName, files);
       setSuccess('Documents uploaded and processing started');
-      await loadFoldersAndFiles(); // Refresh files in the selected folder
+      await loadFoldersAndFiles();
     } catch (err) {
       setError(`Error uploading documents: ${err.response?.data?.details || err.message}`);
       console.error('Error uploading documents:', err);
@@ -94,12 +88,14 @@ export const FileManagerProvider = ({ children }) => {
     success,
     setError,
     setSuccess,
+    hasAiResponse, // Expose hasAiResponse
+    setHasAiResponse, // Expose setHasAiResponse
     loadFoldersAndFiles,
     createFolder,
     uploadDocuments,
   }), [
     folders, selectedFolder, documents, chatSessions, selectedChatSessionId,
-    loading, error, success,
+    loading, error, success, hasAiResponse,
     loadFoldersAndFiles, createFolder, uploadDocuments,
   ]);
 

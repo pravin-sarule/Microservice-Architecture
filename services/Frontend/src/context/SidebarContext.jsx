@@ -1,13 +1,14 @@
 import React, { createContext, useState, useContext } from 'react';
 
-const SidebarContext = createContext(null);
+export const SidebarContext = createContext(null);
 
 export const SidebarProvider = ({ children }) => {
   const [isSidebarHidden, setIsSidebarHidden] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [forceSidebarCollapsed, setForceSidebarCollapsed] = useState(false); // New state
 
   return (
-    <SidebarContext.Provider value={{ isSidebarHidden, setIsSidebarHidden, isSidebarCollapsed, setIsSidebarCollapsed }}>
+    <SidebarContext.Provider value={{ isSidebarHidden, setIsSidebarHidden, isSidebarCollapsed, setIsSidebarCollapsed, forceSidebarCollapsed, setForceSidebarCollapsed }}>
       {children}
     </SidebarContext.Provider>
   );

@@ -66,7 +66,17 @@ const ChatHistoryPage = () => {
   };
 
   const handleChatClick = (chat) => {
-    navigate(`/analysis/${chat.file_id}/${chat.session_id}`, { state: { chat } });
+    if (chat.file_id && chat.session_id) {
+      navigate(`/analysis/${chat.file_id}/${chat.session_id}`, { state: { chat } });
+    } else if (chat.session_id) {
+      // If file_id is missing, navigate using only session_id, assuming the AnalysisPage can handle it.
+      // This might require adjustments in AnalysisPage to fetch data based on session_id alone.
+      navigate(`/analysis/session/${chat.session_id}`, { state: { chat } });
+    } else {
+      console.error("Cannot navigate to chat: Missing file_id and session_id", chat);
+      // Optionally, show a user-friendly error message
+      alert("Cannot open this chat. Information is incomplete.");
+    }
   };
 
   if (loading) {

@@ -334,6 +334,7 @@ class ApiService {
 
     console.log(`[ApiService] Requesting URL: ${url}`);
     console.log(`[ApiService] Request method: ${options.method || 'GET'}`);
+    console.log(`[ApiService] Full URL being sent: ${url}`);
 
     const headers = {
       ...(fetchOptions.body instanceof FormData
@@ -610,17 +611,29 @@ class ApiService {
   // ========================
   // ✅ Chat APIs
   // ========================
-//   async fetchChatSessions() {
-//     return this.request("/chat");
-//   }
+  async fetchChatSessions(page = 1, limit = 20) {
+    return this.request(`/files?page=${page}&limit=${limit}`);
+  }
 
 //   async fetchFileChatHistory(fileId) {
 //     return this.request(`/chat/${fileId}`);
 //   }
 
-//   async fetchChatsBySessionId(sessionId) {
-//     return this.request(`/chat/session/${sessionId}`);
-//   }
+  // async fetchChatsBySessionId(fileId, sessionId) {
+  //   if (!fileId) {
+  //     console.warn("[ApiService] fetchChatsBySessionId called without fileId. This might lead to issues if the backend expects it.");
+  //     // Fallback to the original endpoint if fileId is not provided, though it's likely to 404.
+  //     return this.request(`/chat/session/${sessionId}`);
+  //   }
+  //   return this.request(`/files/${fileId}/chat/session/${sessionId}`);
+  // }
+async fetchChatsBySessionId(sessionId) {
+  if (!sessionId) {
+    console.warn("[ApiService] fetchChatsBySessionId called without sessionId.");
+    return;
+  }
+  return this.request(`/session/${sessionId}`);
+}
 
 //   async fetchSingleChat(chatId) {
 //     return this.request(`/chat/single/${chatId}`);
@@ -633,27 +646,57 @@ class ApiService {
 //     });
 //   }
 // }
-async fetchChatSessions() {
-    return this.request("/files/all");
+  async getFolderChatSessions(folderName) {
+    return this.request(`/files/${folderName}/chat/sessions`);
   }
 
-  async fetchFileChatHistory(fileId) {
-    return this.request(`/files/chat/${fileId}`);
+  async getFolderChatSessionById(folderName, sessionId) {
+    return this.request(`/files/${folderName}/chat/sessions/${sessionId}`);
   }
 
-  async fetchChatsBySessionId(sessionId) {
-    return this.request(`/files/session/${sessionId}`);
-  }
-
-  async fetchSingleChat(chatId) {
-    return this.request(`/files/chat/single/${chatId}`);
-  }
-
-  async continueFileChat(fileId, question, sessionId) {
-    return this.request(`files/chat`, {
+  async queryFolderDocuments(folderName, question) {
+    return this.request(`/files/${folderName}/chat`, {
       method: "POST",
-      body: JSON.stringify({ file_id: fileId, question, session_id: sessionId }),
+      body: JSON.stringify({ question }),
     });
+  }
+
+  async continueFolderChat(folderName, sessionId, question) {
+    return this.request(`/files/${folderName}/chat/${sessionId}`, {
+      method: "POST",
+      body: JSON.stringify({ question }),
+    });
+  }
+
+  async deleteFolderChatSession(folderName, sessionId) {
+    return this.request(`/files/${folderName}/chat/sessions/${sessionId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async queryTestDocuments(question, sessionId) {
+    return this.request(`/files/test/chat`, {
+      method: "POST",
+      body: JSON.stringify({ question, session_id: sessionId }),
+    });
+  }
+
+  async queryFolderDocumentsWithSecret(folderName, question, promptLabel, sessionId) {
+    return this.request(`/files/${folderName}/query`, {
+      method: "POST",
+      body: JSON.stringify({ question, prompt_label: promptLabel, session_id: sessionId }),
+    });
+  }
+
+  // ========================
+  // ✅ Secret Manager APIs
+  // ========================
+  async getSecrets() {
+    return this.request(`/files/secrets?fetch=true`);
+  }
+
+  async getSecretById(secretId) {
+    return this.request(`/files/secrets/${secretId}`);
   }
 
   // ========================

@@ -49,17 +49,25 @@ const Sidebar = () => {
   const navigate = useNavigate();
 
   const {
-    fileInputRef,
-    folderInputRef,
-    setShowNewFolderInput,
-    showNewFolderInput,
-    newFolderName,
-    setNewFolderName,
-    creatingFolder,
-    createFolder,
-    handleFileChange,
-    handleFolderChange,
+    createFolder, // Keep createFolder as it's from the context
   } = useFileManager();
+
+  // Local states for file/folder management within Sidebar, if needed
+  const fileInputRef = useRef(null);
+  const folderInputRef = useRef(null);
+  const [showNewFolderInput, setShowNewFolderInput] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [creatingFolder, setCreatingFolder] = useState(false); // Assuming local state for this
+
+  const handleFileChange = (e) => {
+    // Implement local file change logic or pass up via context if needed
+    console.log("File(s) selected:", e.target.files);
+  };
+
+  const handleFolderChange = (e) => {
+    // Implement local folder change logic or pass up via context if needed
+    console.log("Folder(s) selected:", e.target.files);
+  };
 
   const { user } = useAuth(); // Get user from AuthContext
 

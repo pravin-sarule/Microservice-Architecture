@@ -1,3 +1,6 @@
+
+
+
 import axios from 'axios';
 
 const API_BASE_URL = 'http://localhost:5000/docs';
@@ -7,180 +10,194 @@ const getAuthHeader = () => {
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
-export const documentApi = {
+const documentApi = {
   // Create a new folder
   createFolder: async (folderName, parentPath = '') => {
-    try {
-      const response = await axios.post(
-        `${API_BASE_URL}/create-folder`,
-        { folderName, parentPath },
-        { headers: getAuthHeader() }
-      );
-      return response.data;
-    } catch (error) {
-      console.error('Error creating folder:', error.response?.data || error.message);
-      throw error;
-    }
+    const response = await axios.post(
+      `${API_BASE_URL}/create-folder`,
+      { folderName, parentPath },
+      { headers: getAuthHeader() }
+    );
+    return response.data;
   },
 
-  // Get all folders and files for a user
+  // Get all folders & files
   getFoldersAndFiles: async () => {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/folders`, {
-        headers: getAuthHeader(),
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Error fetching folders and files:', error.response?.data || error.message);
-      throw error;
-    }
+    const response = await axios.get(`${API_BASE_URL}/folders`, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
   },
 
-  // Upload multiple documents to a folder
+  // Upload multiple documents
   uploadDocuments: async (folderName, files) => {
-    try {
-      const formData = new FormData();
-      files.forEach((file) => {
-        formData.append('files', file);
-      });
+    const formData = new FormData();
+    files.forEach((file) => formData.append('files', file));
 
-      const response = await axios.post(
-        `${API_BASE_URL}/${folderName}/upload`,
-        formData,
-        {
-          headers: {
-            ...getAuthHeader(),
-            'Content-Type': 'multipart/form-data',
-          },
-        }
-      );
-      return response.data;
-    } catch (error) {
-      console.error('Error uploading documents:', error.response?.data || error.message);
-      throw error;
-    }
+    const response = await axios.post(
+      `${API_BASE_URL}/${encodeURIComponent(folderName)}/upload`,
+      formData,
+      {
+        headers: {
+          ...getAuthHeader(),
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    );
+    return response.data.documents || [];
   },
 
-  // Generate and store folder summary
+  // Get folder summary
   getFolderSummary: async (folderName) => {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/${folderName}/summary`, {
-        headers: getAuthHeader(),
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Error getting folder summary:', error.response?.data || error.message);
-      throw error;
-    }
+    const response = await axios.get(
+      `${API_BASE_URL}/${encodeURIComponent(folderName)}/summary`,
+      { headers: getAuthHeader() }
+    );
+    return response.data;
   },
 
-  // Get file processing status (individual file)
+  // Get file processing status
   getFileProcessingStatus: async (fileId) => {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/status/${fileId}`, {
-        headers: getAuthHeader(),
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Error getting file processing status:', error.response?.data || error.message);
-      throw error;
-    }
+    const response = await axios.get(`${API_BASE_URL}/status/${fileId}`, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
   },
 
-  // Get folder processing status (all documents in folder)
+  // Get folder processing status
   getFolderProcessingStatus: async (folderName) => {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/${folderName}/status`, {
-        headers: getAuthHeader(),
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Error getting folder processing status:', error.response?.data || error.message);
-      throw error;
-    }
+    const response = await axios.get(
+      `${API_BASE_URL}/${encodeURIComponent(folderName)}/status`,
+      { headers: getAuthHeader() }
+    );
+    return response.data;
   },
 
-  // Query documents in folder
-  queryFolderDocuments: async (folderName, question, sessionId) => {
-    try {
-      const response = await axios.post(
-        `${API_BASE_URL}/${folderName}/query`,
-        { question, sessionId },
-        { headers: getAuthHeader() }
-      );
-      return response.data;
-    } catch (error) {
-      console.error('Error querying folder documents:', error.response?.data || error.message);
-      throw error;
+  // Get document content
+  getDocumentContent: async (fileId) => {
+    const response = await axios.get(`${API_BASE_URL}/status/${fileId}`, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  },
+
+  // Query folder documents
+  queryFolderDocuments: async (folderName, question, sessionId = null) => {
+    if (!folderName) {
+      throw new Error('Folder name is required to query documents');
     }
+    
+    const payload = { question };
+    if (sessionId) {
+      payload.sessionId = sessionId;
+    }
+
+    const response = await axios.post(
+      `${API_BASE_URL}/${encodeURIComponent(folderName)}/query`,
+      payload,
+      { headers: getAuthHeader() }
+    );
+    return response.data;
+  },
+
+  // Query documents from test_case folder
+  queryTestDocuments: async (question, sessionId = null) => {
+    const payload = { question };
+    if (sessionId) {
+      payload.sessionId = sessionId;
+    }
+
+    const response = await axios.post(
+      `${API_BASE_URL}/files/test_case/chat`,
+      payload,
+      { headers: getAuthHeader() }
+    );
+    return response.data;
+  },
+
+  // Query folder documents with a secret prompt
+  queryFolderDocumentsWithSecret: async (folderName, promptValue, promptLabel, sessionId = null) => {
+    if (!folderName) {
+      throw new Error('Folder name is required to query documents');
+    }
+
+    const payload = { 
+      question: promptValue, 
+      promptLabel 
+    };
+    if (sessionId) {
+      payload.sessionId = sessionId;
+    }
+
+    const response = await axios.post(
+      `${API_BASE_URL}/${encodeURIComponent(folderName)}/query`,
+      payload,
+      { headers: getAuthHeader() }
+    );
+    return response.data;
   },
 
   // Get all chat sessions for a folder
   getFolderChatSessions: async (folderName) => {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/${folderName}/sessions`, {
-        headers: getAuthHeader(),
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Error fetching folder chat sessions:', error.response?.data || error.message);
-      throw error;
-    }
+    const response = await axios.get(
+      `${API_BASE_URL}/${encodeURIComponent(folderName)}/sessions`,
+      { headers: getAuthHeader() }
+    );
+    return response.data;
   },
 
-  // Get specific chat session with complete conversation history
+  // Get a specific chat session
   getFolderChatSessionById: async (folderName, sessionId) => {
-    try {
-      const response = await axios.get(`${API_BASE_URL}/${folderName}/sessions/${sessionId}`, {
-        headers: getAuthHeader(),
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Error fetching specific folder chat session:', error.response?.data || error.message);
-      throw error;
-    }
+    const response = await axios.get(
+      `${API_BASE_URL}/${encodeURIComponent(folderName)}/sessions/${sessionId}`,
+      { headers: getAuthHeader() }
+    );
+    return response.data;
   },
 
-  // Continue conversation in existing chat session
+  // Continue chat in a session
   continueFolderChat: async (folderName, sessionId, question) => {
-    try {
-      const response = await axios.post(
-        `${API_BASE_URL}/${folderName}/sessions/${sessionId}/continue`,
-        { question },
-        { headers: getAuthHeader() }
-      );
-      return response.data;
-    } catch (error) {
-      console.error('Error continuing folder chat:', error.response?.data || error.message);
-      throw error;
-    }
+    const response = await axios.post(
+      `${API_BASE_URL}/${encodeURIComponent(folderName)}/sessions/${sessionId}/continue`,
+      { question },
+      { headers: getAuthHeader() }
+    );
+    return response.data;
   },
 
-  // Delete entire chat session
+  // Delete a chat session
   deleteFolderChatSession: async (folderName, sessionId) => {
-    try {
-      const response = await axios.delete(`${API_BASE_URL}/${folderName}/sessions/${sessionId}`, {
-        headers: getAuthHeader(),
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Error deleting folder chat session:', error.response?.data || error.message);
-      throw error;
-    }
+    const response = await axios.delete(
+      `${API_BASE_URL}/${encodeURIComponent(folderName)}/sessions/${sessionId}`,
+      { headers: getAuthHeader() }
+    );
+    return response.data;
   },
 
-  // Query documents from the /docs/Test/query endpoint
-  queryTestDocuments: async (question, sessionId) => {
-    try {
-      const response = await axios.post(
-        `${API_BASE_URL}/Test/query`,
-        { question, sessionId },
-        { headers: getAuthHeader() }
-      );
-      return response.data;
-    } catch (error) {
-      console.error('Error querying test documents:', error.response?.data || error.message);
-      throw error;
-    }
+  // Get all secrets
+  getSecrets: async () => {
+    const response = await axios.get(`${API_BASE_URL}/files/secrets?fetch=true`, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  },
+
+  // Get a specific secret by ID
+  getSecretById: async (secretId) => {
+    const response = await axios.get(`${API_BASE_URL}/files/secrets/${secretId}`, {
+      headers: getAuthHeader(),
+    });
+    return response.data;
+  },
+
+  // Get all chats for a specific folder
+  getFolderChats: async (folderName) => {
+    const response = await axios.get(
+      `${API_BASE_URL}/${encodeURIComponent(folderName)}/chats`,
+      { headers: getAuthHeader() }
+    );
+    return response.data;
   },
 };
+
+export default documentApi;

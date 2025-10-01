@@ -42,5 +42,5 @@ router.post("/:folderName/sessions/:sessionId/continue", authMiddleware.protect,
 // Delete entire chat session
 router.delete("/:folderName/sessions/:sessionId", authMiddleware.protect, fileController.deleteFolderChatSession);
 
-
+router.get("/:folderName/chats", authMiddleware.protect, fileController.getFolderChatsByFolder);
 module.exports = router;

@@ -40,6 +40,11 @@ function sanitizeName(name) {
   return String(name).trim().replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
+// Helper to escape special characters in a string for use in a regular expression
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
+}
+
 async function ensureUniqueKey(key) {
   const dir = path.posix.dirname(key);
   const name = path.posix.basename(key);
@@ -391,38 +396,481 @@ exports.getFolderSummary = async (req, res) => {
 };
 
 /* ----------------- Query Folder Documents (FIXED) ----------------- */
+// exports.queryFolderDocuments = async (req, res) => {
+//   try {
+//     const { folderName } = req.params;
+//     const { question, sessionId, maxResults = 10 } = req.body;
+//     const userId = req.user.id;
+
+//     if (!question) {
+//       return res.status(400).json({ error: "Question is required" });
+//     }
+
+//     console.log(`[queryFolderDocuments] Processing query for folder: ${folderName}, user: ${userId}`);
+//     console.log(`[queryFolderDocuments] Question: ${question}`);
+
+//     // Get all processed files in the folder
+//     const files = await File.findByUserIdAndFolderPath(userId, folderName);
+//     const processedFiles = files.filter(f => !f.is_folder && f.status === "processed");
+    
+//     console.log(`[queryFolderDocuments] Found ${processedFiles.length} processed files in folder ${folderName}`);
+    
+//     if (processedFiles.length === 0) {
+//       return res.status(404).json({ 
+//         error: "No processed documents in folder",
+//         debug: { totalFiles: files.length, processedFiles: 0 }
+//       });
+//     }
+
+//     // Get all chunks from all files in the folder
+//     let allChunks = [];
+//     for (const file of processedFiles) {
+//       const chunks = await FileChunk.getChunksByFileId(file.id);
+//       console.log(`[queryFolderDocuments] File ${file.originalname} has ${chunks.length} chunks`);
+      
+//       const chunksWithFileInfo = chunks.map(chunk => ({
+//         ...chunk,
+//         filename: file.originalname,
+//         file_id: file.id
+//       }));
+//       allChunks = allChunks.concat(chunksWithFileInfo);
+//     }
+
+//     console.log(`[queryFolderDocuments] Total chunks found: ${allChunks.length}`);
+
+//     if (allChunks.length === 0) {
+//       return res.json({
+//         answer: "The documents in this folder don't appear to have any processed content yet. Please wait for processing to complete or check the document processing status.",
+//         sources: [],
+//         sessionId: sessionId || uuidv4(),
+//         debug: { processedFiles: processedFiles.length, totalChunks: 0 }
+//       });
+//     }
+
+//     // Use keyword-based search for better reliability
+//     const questionLower = question.toLowerCase();
+//     const questionWords = questionLower
+//       .split(/\s+/)
+//       .filter(word => word.length > 3 && !['what', 'where', 'when', 'how', 'why', 'which', 'this', 'that', 'these', 'those'].includes(word));
+    
+//     console.log(`[queryFolderDocuments] Question keywords:`, questionWords);
+
+//     let relevantChunks = [];
+    
+//     if (questionWords.length > 0) {
+//       // Score chunks based on keyword matches and context
+//       relevantChunks = allChunks.map(chunk => {
+//         const contentLower = chunk.content.toLowerCase();
+//         let score = 0;
+        
+//         // Check for exact keyword matches
+//         for (const word of questionWords) {
+//           const escapedWord = escapeRegExp(word);
+//           const regex = new RegExp(`\\b${escapedWord}\\b`, 'gi');
+//           const matches = (contentLower.match(regex) || []).length;
+//           score += matches * 2; // Weight exact matches higher
+//         }
+        
+//         // Check for partial matches
+//         for (const word of questionWords) {
+//           if (contentLower.includes(word)) {
+//             score += 1;
+//           }
+//         }
+        
+//         return {
+//           ...chunk,
+//           similarity_score: score
+//         };
+//       })
+//       .filter(chunk => chunk.similarity_score > 0)
+//       .sort((a, b) => b.similarity_score - a.similarity_score)
+//       .slice(0, maxResults);
+//     } else {
+//       // If no meaningful keywords, use first chunks from each document for context
+//       const chunksPerDoc = Math.max(1, Math.floor(maxResults / processedFiles.length));
+//       for (const file of processedFiles) {
+//         const fileChunks = allChunks.filter(chunk => chunk.file_id === file.id);
+//         const topChunks = fileChunks.slice(0, chunksPerDoc).map(chunk => ({
+//           ...chunk,
+//           similarity_score: 0.5
+//         }));
+//         relevantChunks = relevantChunks.concat(topChunks);
+//       }
+//     }
+
+//     console.log(`[queryFolderDocuments] Found ${relevantChunks.length} relevant chunks`);
+
+//     // Prepare comprehensive context for AI
+//     const contextText = relevantChunks.map((chunk, index) => 
+//       `[Document: ${chunk.filename} - Page ${chunk.page_start || 'N/A'}]\n${chunk.content.substring(0, 2000)}`
+//     ).join("\n\n---\n\n");
+
+//     console.log(`[queryFolderDocuments] Context text length: ${contextText.length} characters`);
+
+//     // Enhanced prompt for better responses
+//     const prompt = `
+// You are an AI assistant analyzing a collection of documents in folder "${folderName}". 
+
+// USER QUESTION: "${question}"
+
+// DOCUMENT CONTENT:
+// ${contextText}
+
+// INSTRUCTIONS:
+// 1. Provide a comprehensive, detailed answer based on the document content
+// 2. If information spans multiple documents, clearly indicate which documents contain what information
+// 3. Use specific details, quotes, and examples from the documents when possible
+// 4. If you can partially answer the question, provide what information is available and note what might be missing
+// 5. Be thorough and helpful - synthesize information across all relevant documents
+// 6. If the question asks about relationships or connections, analyze how the documents relate to each other
+
+// Provide your answer:`;
+
+//     const answer = await queryFolderWithGemini(prompt);
+//     console.log(`[queryFolderDocuments] Generated answer length: ${answer.length} characters`);
+
+//     // Save the chat interaction
+//     let savedChat;
+//     try {
+//       savedChat = await FolderChat.saveFolderChat(
+//         userId,
+//         folderName,
+//         question,
+//         answer,
+//         sessionId,
+//         processedFiles.map(f => f.id)
+//       );
+//     } catch (chatError) {
+//       console.warn(`[queryFolderDocuments] Failed to save chat:`, chatError.message);
+//       // Fallback - create a session ID for response continuity
+//       savedChat = { session_id: sessionId || uuidv4() };
+//     }
+
+//     // Prepare sources with more detail
+//     const sources = relevantChunks.map(chunk => ({
+//       document: chunk.filename,
+//       content: chunk.content.substring(0, 400) + (chunk.content.length > 400 ? "..." : ""),
+//       page: chunk.page_start || 'N/A',
+//       relevanceScore: chunk.similarity_score || 0
+//     }));
+
+//     return res.json({
+//       answer,
+//       sources,
+//       sessionId: savedChat.session_id,
+//       folderName,
+//       documentsSearched: processedFiles.length,
+//       chunksFound: relevantChunks.length,
+//       totalChunks: allChunks.length,
+//       searchMethod: questionWords.length > 0 ? 'keyword_search' : 'document_sampling'
+//     });
+
+//   } catch (error) {
+//     console.error("❌ queryFolderDocuments error:", error);
+//     res.status(500).json({ 
+//       error: "Failed to process query", 
+//       details: error.message 
+//     });
+//   }
+// };
+// exports.queryFolderDocuments = async (req, res) => {
+//   let chatCost;
+//   let userId = null;
+
+//   try {
+//     const {
+//       folderName,
+//     } = req.params;
+
+//     const {
+//       question,
+//       used_secret_prompt = false,
+//       prompt_label = null,
+//       session_id = null, // ✅ allow frontend to pass session
+//       maxResults = 10,
+//     } = req.body;
+
+//     userId = req.user.id;
+
+//     // Validation
+//     if (!folderName || !question) {
+//       console.error("❌ Chat Error: folderName or question missing.");
+//       return res.status(400).json({ error: "folderName and question are required." });
+//     }
+
+//     console.log(`[chatWithFolder] Processing query for folder: ${folderName}, user: ${userId}`);
+//     console.log(`[chatWithFolder] Question: ${question}`);
+
+//     // Get processed files in folder
+//     const files = await File.findByUserIdAndFolderPath(userId, folderName);
+//     const processedFiles = files.filter(f => !f.is_folder && f.status === "processed");
+//     if (processedFiles.length === 0) {
+//       return res.status(404).json({
+//         error: "No processed documents in folder",
+//         debug: { totalFiles: files.length, processedFiles: 0 }
+//       });
+//     }
+
+//     // Collect chunks
+//     let allChunks = [];
+//     for (const file of processedFiles) {
+//       const chunks = await FileChunk.getChunksByFileId(file.id);
+//       const chunksWithFileInfo = chunks.map(chunk => ({
+//         ...chunk,
+//         filename: file.originalname,
+//         file_id: file.id
+//       }));
+//       allChunks = allChunks.concat(chunksWithFileInfo);
+//     }
+
+//     if (allChunks.length === 0) {
+//       return res.status(400).json({
+//         error: "The documents in this folder have no processed content yet."
+//       });
+//     }
+
+//     // Token cost
+//     const chatContentLength = question.length + allChunks.reduce((sum, c) => sum + c.content.length, 0);
+//     chatCost = Math.ceil(chatContentLength / 100);
+
+//     console.warn(`⚠️ Token reservation bypassed for user ${userId}.`);
+
+//     // Find relevant chunks (very simplified keyword search)
+//     const questionEmbedding = await generateEmbedding(question);
+//     const relevantChunks = await ChunkVector.findNearestChunksAcrossFiles(
+//       questionEmbedding,
+//       maxResults,
+//       processedFiles.map(f => f.id)
+//     );
+
+//     const relevantChunkContents = relevantChunks.map((chunk) => chunk.content);
+//     const usedChunkIds = relevantChunks.map((chunk) => chunk.chunk_id);
+
+//     let answer;
+//     if (relevantChunkContents.length === 0) {
+//       answer = await askGemini(
+//         "No relevant context found in the folder documents.",
+//         question
+//       );
+//     } else {
+//       const context = relevantChunkContents.join("\n\n");
+//       answer = await askGemini(context, question);
+//     }
+
+//     // Store chat
+//     const storedQuestion = used_secret_prompt
+//       ? `[${prompt_label || "Secret Prompt"}]`
+//       : question;
+
+//     const savedChat = await FolderChat.saveFolderChat(
+//       userId,
+//       folderName,
+//       storedQuestion,
+//       answer,
+//       session_id, // ✅ if null, new session is created
+//       processedFiles.map(f => f.id), // summarized_file_ids
+//       usedChunkIds,
+//       used_secret_prompt,
+//       used_secret_prompt ? prompt_label : null
+//     );
+
+//     console.warn(`⚠️ Token commitment bypassed for user ${userId}.`);
+
+//     // ✅ Fetch full session history
+//     const history = await FolderChat.getFolderChatHistory(userId, folderName, savedChat.session_id);
+
+//     return res.json({
+//       session_id: savedChat.session_id,
+//       answer,
+//       history, // ✅ return full conversation thread
+//     });
+//   } catch (error) {
+//     console.error("❌ Error chatting with folder:", error);
+//     if (chatCost && userId) {
+//       console.warn(`⚠️ Token rollback bypassed for user ${userId}.`);
+//     }
+//     return res.status(500).json({
+//       error: "Failed to get AI answer.",
+//       details: error.message,
+//     });
+//   }
+// };
+
+
+// exports.queryFolderDocuments = async (req, res) => {
+//   let chatCost;
+//   let userId = null;
+
+//   try {
+//     const {
+//       folderName,
+//     } = req.params;
+
+//     const {
+//       question,
+//       used_secret_prompt = false,
+//       prompt_label = null,
+//       session_id = null, // ✅ allow frontend to pass session
+//       maxResults = 10,
+//     } = req.body;
+
+//     userId = req.user.id;
+
+//     // Validation
+//     if (!folderName || !question) {
+//       console.error("❌ Chat Error: folderName or question missing.");
+//       return res
+//         .status(400)
+//         .json({ error: "folderName and question are required." });
+//     }
+
+//     console.log(`[chatWithFolder] Processing query for folder: ${folderName}, user: ${userId}`);
+//     console.log(`[chatWithFolder] Question: ${question}`);
+
+//     // Get processed files in folder
+//     const files = await File.findByUserIdAndFolderPath(userId, folderName);
+//     const processedFiles = files.filter(f => !f.is_folder && f.status === "processed");
+
+//     if (processedFiles.length === 0) {
+//       return res.status(404).json({
+//         error: "No processed documents in folder",
+//         debug: { totalFiles: files.length, processedFiles: 0 }
+//       });
+//     }
+
+//     // Collect chunks across all files
+//     let allChunks = [];
+//     for (const file of processedFiles) {
+//       const chunks = await FileChunk.getChunksByFileId(file.id);
+//       const chunksWithFileInfo = chunks.map(chunk => ({
+//         ...chunk,
+//         filename: file.originalname,
+//         file_id: file.id
+//       }));
+//       allChunks = allChunks.concat(chunksWithFileInfo);
+//     }
+
+//     if (allChunks.length === 0) {
+//       return res.status(400).json({
+//         error: "The documents in this folder have no processed content yet."
+//       });
+//     }
+
+//     // Token cost (rough estimate)
+//     const chatContentLength = question.length + allChunks.reduce((sum, c) => sum + c.content.length, 0);
+//     chatCost = Math.ceil(chatContentLength / 100);
+
+//     // 🚨 Token reservation bypassed
+//     console.warn(`⚠️ Token reservation bypassed for user ${userId}.`);
+
+//     // Find context
+//     const questionEmbedding = await generateEmbedding(question);
+//     const relevantChunks = await ChunkVector.findNearestChunksAcrossFiles(
+//       questionEmbedding,
+//       maxResults,
+//       processedFiles.map(f => f.id)
+//     );
+
+//     const relevantChunkContents = relevantChunks.map((chunk) => chunk.content);
+//     const usedChunkIds = relevantChunks.map((chunk) => chunk.chunk_id);
+
+//     let answer;
+//     if (relevantChunkContents.length === 0) {
+//       answer = await askGemini(
+//         "No relevant context found in the folder documents.",
+//         question
+//       );
+//     } else {
+//       const context = relevantChunkContents.join("\n\n");
+//       answer = await askGemini(context, question);
+//     }
+
+//     // Store chat
+//     const storedQuestion = used_secret_prompt
+//       ? `[${prompt_label || "Secret Prompt"}]`
+//       : question;
+
+//     const savedChat = await FolderChat.saveFolderChat(
+//       userId,
+//       folderName,
+//       storedQuestion,
+//       answer,
+//       session_id, // ✅ if null, new session is created
+//       processedFiles.map(f => f.id), // summarized_file_ids
+//       usedChunkIds,
+//       used_secret_prompt,
+//       used_secret_prompt ? prompt_label : null
+//     );
+
+//     // 🚨 Token commit bypassed
+//     console.warn(`⚠️ Token commitment bypassed for user ${userId}.`);
+
+//     // ✅ Fetch full session history so frontend gets all messages live
+//     const history = await FolderChat.getFolderChatHistory(userId, folderName, savedChat.session_id);
+
+//     return res.json({
+//       session_id: savedChat.session_id,
+//       answer,
+//       history, // ✅ full conversation thread
+//     });
+//   } catch (error) {
+//     console.error("❌ Error chatting with folder:", error);
+//     if (chatCost && userId) {
+//       console.warn(`⚠️ Token rollback bypassed for user ${userId}.`);
+//     }
+//     return res
+//       .status(500)
+//       .json({ error: "Failed to get AI answer.", details: error.message });
+//   }
+// };
+
+
 exports.queryFolderDocuments = async (req, res) => {
+  let chatCost;
+  let userId = null;
+
   try {
     const { folderName } = req.params;
-    const { question, sessionId, maxResults = 10 } = req.body;
-    const userId = req.user.id;
 
-    if (!question) {
-      return res.status(400).json({ error: "Question is required" });
+    const {
+      question,                    // This is the FULL prompt text (for AI processing)
+      used_secret_prompt = false,  // Boolean flag
+      prompt_label = null,         // This is the SHORT label (for display)
+      session_id = null,
+      maxResults = 10,
+    } = req.body;
+
+    userId = req.user.id;
+
+    // Validation
+    if (!folderName || !question) {
+      console.error("❌ Chat Error: folderName or question missing.");
+      return res
+        .status(400)
+        .json({ error: "folderName and question are required." });
     }
 
-    console.log(`[queryFolderDocuments] Processing query for folder: ${folderName}, user: ${userId}`);
-    console.log(`[queryFolderDocuments] Question: ${question}`);
+    console.log(`[chatWithFolder] Processing query for folder: ${folderName}, user: ${userId}`);
+    console.log(`[chatWithFolder] Question length: ${question.length}`);
+    console.log(`[chatWithFolder] Used secret prompt: ${used_secret_prompt}`);
+    console.log(`[chatWithFolder] Prompt label: ${prompt_label}`);
 
-    // Get all processed files in the folder
+    // Get processed files in folder
     const files = await File.findByUserIdAndFolderPath(userId, folderName);
     const processedFiles = files.filter(f => !f.is_folder && f.status === "processed");
-    
-    console.log(`[queryFolderDocuments] Found ${processedFiles.length} processed files in folder ${folderName}`);
-    
+
     if (processedFiles.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: "No processed documents in folder",
         debug: { totalFiles: files.length, processedFiles: 0 }
       });
     }
 
-    // Get all chunks from all files in the folder
+    // Collect chunks across all files
     let allChunks = [];
     for (const file of processedFiles) {
       const chunks = await FileChunk.getChunksByFileId(file.id);
-      console.log(`[queryFolderDocuments] File ${file.originalname} has ${chunks.length} chunks`);
-      
       const chunksWithFileInfo = chunks.map(chunk => ({
         ...chunk,
         filename: file.originalname,
@@ -431,144 +879,106 @@ exports.queryFolderDocuments = async (req, res) => {
       allChunks = allChunks.concat(chunksWithFileInfo);
     }
 
-    console.log(`[queryFolderDocuments] Total chunks found: ${allChunks.length}`);
-
     if (allChunks.length === 0) {
-      return res.json({
-        answer: "The documents in this folder don't appear to have any processed content yet. Please wait for processing to complete or check the document processing status.",
-        sources: [],
-        sessionId: sessionId || uuidv4(),
-        debug: { processedFiles: processedFiles.length, totalChunks: 0 }
+      return res.status(400).json({
+        error: "The documents in this folder have no processed content yet."
       });
     }
 
-    // Use keyword-based search for better reliability
-    const questionLower = question.toLowerCase();
-    const questionWords = questionLower
-      .split(/\s+/)
-      .filter(word => word.length > 3 && !['what', 'where', 'when', 'how', 'why', 'which', 'this', 'that', 'these', 'those'].includes(word));
-    
-    console.log(`[queryFolderDocuments] Question keywords:`, questionWords);
+    // Token cost (rough estimate)
+    const chatContentLength = question.length + allChunks.reduce((sum, c) => sum + c.content.length, 0);
+    chatCost = Math.ceil(chatContentLength / 100);
+    console.warn(`⚠️ Token reservation bypassed for user ${userId}.`);
 
-    let relevantChunks = [];
-    
-    if (questionWords.length > 0) {
-      // Score chunks based on keyword matches and context
-      relevantChunks = allChunks.map(chunk => {
-        const contentLower = chunk.content.toLowerCase();
-        let score = 0;
-        
-        // Check for exact keyword matches
-        for (const word of questionWords) {
-          const regex = new RegExp(`\\b${word}\\b`, 'gi');
-          const matches = (contentLower.match(regex) || []).length;
-          score += matches * 2; // Weight exact matches higher
-        }
-        
-        // Check for partial matches
-        for (const word of questionWords) {
-          if (contentLower.includes(word)) {
-            score += 1;
-          }
-        }
-        
-        return {
-          ...chunk,
-          similarity_score: score
-        };
-      })
-      .filter(chunk => chunk.similarity_score > 0)
-      .sort((a, b) => b.similarity_score - a.similarity_score)
-      .slice(0, maxResults);
-    } else {
-      // If no meaningful keywords, use first chunks from each document for context
-      const chunksPerDoc = Math.max(1, Math.floor(maxResults / processedFiles.length));
-      for (const file of processedFiles) {
-        const fileChunks = allChunks.filter(chunk => chunk.file_id === file.id);
-        const topChunks = fileChunks.slice(0, chunksPerDoc).map(chunk => ({
-          ...chunk,
-          similarity_score: 0.5
-        }));
-        relevantChunks = relevantChunks.concat(topChunks);
-      }
-    }
+    // Find context using the FULL question (even if it's a secret prompt)
+    const questionEmbedding = await generateEmbedding(question);
+    const relevantChunks = await ChunkVector.findNearestChunksAcrossFiles(
+      questionEmbedding,
+      maxResults,
+      processedFiles.map(f => f.id)
+    );
 
-    console.log(`[queryFolderDocuments] Found ${relevantChunks.length} relevant chunks`);
+    const relevantChunkContents = relevantChunks.map((chunk) => chunk.content);
+    const usedChunkIds = relevantChunks.map((chunk) => chunk.chunk_id);
 
-    // Prepare comprehensive context for AI
-    const contextText = relevantChunks.map((chunk, index) => 
-      `[Document: ${chunk.filename} - Page ${chunk.page_start || 'N/A'}]\n${chunk.content.substring(0, 2000)}`
-    ).join("\n\n---\n\n");
-
-    console.log(`[queryFolderDocuments] Context text length: ${contextText.length} characters`);
-
-    // Enhanced prompt for better responses
-    const prompt = `
-You are an AI assistant analyzing a collection of documents in folder "${folderName}". 
-
-USER QUESTION: "${question}"
-
-DOCUMENT CONTENT:
-${contextText}
-
-INSTRUCTIONS:
-1. Provide a comprehensive, detailed answer based on the document content
-2. If information spans multiple documents, clearly indicate which documents contain what information
-3. Use specific details, quotes, and examples from the documents when possible
-4. If you can partially answer the question, provide what information is available and note what might be missing
-5. Be thorough and helpful - synthesize information across all relevant documents
-6. If the question asks about relationships or connections, analyze how the documents relate to each other
-
-Provide your answer:`;
-
-    const answer = await queryFolderWithGemini(prompt);
-    console.log(`[queryFolderDocuments] Generated answer length: ${answer.length} characters`);
-
-    // Save the chat interaction
-    let savedChat;
-    try {
-      savedChat = await FolderChat.saveFolderChat(
-        userId,
-        folderName,
-        question,
-        answer,
-        sessionId,
-        processedFiles.map(f => f.id)
+    // Generate AI answer using the FULL question
+    let answer;
+    if (relevantChunkContents.length === 0) {
+      answer = await askGemini(
+        "No relevant context found in the folder documents.",
+        question  // Use full question for AI
       );
-    } catch (chatError) {
-      console.warn(`[queryFolderDocuments] Failed to save chat:`, chatError.message);
-      // Fallback - create a session ID for response continuity
-      savedChat = { session_id: sessionId || uuidv4() };
+    } else {
+      const context = relevantChunkContents.join("\n\n");
+      answer = await askGemini(context, question);  // Use full question for AI
     }
 
-    // Prepare sources with more detail
-    const sources = relevantChunks.map(chunk => ({
-      document: chunk.filename,
-      content: chunk.content.substring(0, 400) + (chunk.content.length > 400 ? "..." : ""),
-      page: chunk.page_start || 'N/A',
-      relevanceScore: chunk.similarity_score || 0
+    // ============ CRITICAL FIX ============
+    // Determine what to store in the database:
+    // - If secret prompt: store the SHORT label
+    // - If regular question: store the full question
+    const questionToStore = used_secret_prompt ? prompt_label : question;
+    
+    console.log(`[chatWithFolder] Storing in DB: "${questionToStore}"`);
+    // =====================================
+
+    const savedChat = await FolderChat.saveFolderChat(
+      userId,
+      folderName,
+      questionToStore,              // ✅ Store ONLY the label if secret prompt
+      answer,
+      session_id,
+      processedFiles.map(f => f.id)
+    );
+
+    console.warn(`⚠️ Token commitment bypassed for user ${userId}.`);
+
+    // Fetch full session history
+    const history = await FolderChat.getFolderChatHistory(
+      userId, 
+      folderName, 
+      savedChat.session_id
+    );
+
+    // ============ CRITICAL FIX ============
+    // Map history to ensure proper field names for frontend
+    const mappedHistory = history.map(chat => ({
+      id: chat.id,
+      question: chat.question,              // This will be the label if secret prompt
+      displayQuestion: chat.used_secret_prompt ? chat.prompt_label : chat.question,
+      response: chat.answer,                // ✅ Add 'response' field
+      answer: chat.answer,                  // ✅ Keep 'answer' field
+      message: chat.answer,                 // ✅ Add 'message' field for fallback
+      timestamp: chat.created_at,
+      session_id: chat.session_id,
+      used_secret_prompt: chat.used_secret_prompt,
+      prompt_label: chat.prompt_label,
+      used_chunk_ids: chat.used_chunk_ids,
+      summarized_file_ids: chat.summarized_file_ids
     }));
+    // =====================================
+
+    console.log(`[chatWithFolder] ✅ Response prepared with ${mappedHistory.length} messages`);
 
     return res.json({
-      answer,
-      sources,
-      sessionId: savedChat.session_id,
-      folderName,
-      documentsSearched: processedFiles.length,
-      chunksFound: relevantChunks.length,
-      totalChunks: allChunks.length,
-      searchMethod: questionWords.length > 0 ? 'keyword_search' : 'document_sampling'
+      sessionId: savedChat.session_id,      // ✅ Use camelCase
+      session_id: savedChat.session_id,     // ✅ Also keep snake_case for compatibility
+      answer,                                // ✅ Latest answer
+      response: answer,                      // ✅ Also as 'response'
+      chatHistory: mappedHistory,            // ✅ Use camelCase
+      history: mappedHistory                 // ✅ Also keep 'history' for compatibility
     });
 
   } catch (error) {
-    console.error("❌ queryFolderDocuments error:", error);
-    res.status(500).json({ 
-      error: "Failed to process query", 
-      details: error.message 
-    });
+    console.error("❌ Error chatting with folder:", error);
+    if (chatCost && userId) {
+      console.warn(`⚠️ Token rollback bypassed for user ${userId}.`);
+    }
+    return res
+      .status(500)
+      .json({ error: "Failed to get AI answer.", details: error.message });
   }
 };
-
 /* ----------------- Get Folder Processing Status (NEW) ----------------- */
 exports.getFolderProcessingStatus = async (req, res) => {
   try {
@@ -1216,6 +1626,31 @@ exports.deleteFolderChatSession = async (req, res) => {
     res.status(500).json({ 
       error: "Failed to delete chat session", 
       details: error.message 
+    });
+  }
+};
+
+
+
+
+// Fetch all chats for a specific folder
+exports.getFolderChatsByFolder = async (req, res) => {
+  try {
+    const { folderName } = req.params;
+    const userId = req.user.id; // assuming user is authenticated and middleware sets req.user
+
+    const chats = await FolderChat.getFolderChatHistory(userId, folderName);
+
+    res.status(200).json({
+      success: true,
+      folderName,
+      chats,
+    });
+  } catch (error) {
+    console.error("Error fetching folder chats:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch chats for folder",
     });
   }
 };
