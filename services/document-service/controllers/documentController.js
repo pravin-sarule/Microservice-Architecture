@@ -33,6 +33,8 @@ const {
 const { normalizeGcsKey } = require("../utils/gcsKey");
 const TokenUsageService = require("../services/tokenUsageService");
 const { fileInputBucket, fileOutputBucket } = require("../config/gcs");
+const { checkStorageLimit } = require("../utils/storage"); // Import checkStorageLimit
+const { DOCUMENT_UPLOAD_COST_TOKENS } = require("../middleware/checkTokenLimits");
 
 const { v4: uuidv4 } = require("uuid");
 
@@ -189,7 +191,72 @@ async function processDocument(fileId, fileBuffer, mimetype, userId) {
  * @description Analyzes a processed document using AI and returns insights.
  * @route POST /api/doc/analyze
  */
+// exports.analyzeDocument = async (req, res) => {
+//   const userId = req.user.id;
+//   const authorizationHeader = req.headers.authorization;
+
+//   try {
+//     const { file_id } = req.body;
+//     if (!file_id)
+//       return res.status(400).json({ error: "file_id is required." });
+
+//     const file = await DocumentModel.getFileById(file_id);
+//     if (!file) return res.status(404).json({ error: "File not found." });
+//     if (file.user_id !== userId)
+//       return res.status(403).json({ error: "Access denied." });
+
+//     if (file.status !== "processed") {
+//       return res.status(400).json({
+//         error: "Document is still processing or failed.",
+//         status: file.status,
+//         progress: file.processing_progress,
+//       });
+//     }
+
+//     const chunks = await FileChunkModel.getChunksByFileId(file_id);
+//     const fullText = chunks.map((c) => c.content).join("\n\n");
+
+//     const analysisCost = Math.ceil(fullText.length / 500); // Rough token estimate
+
+//     // 1. Fetch user's usage and plan details
+//     const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+
+//     // 2. Enforce token limits for AI analysis
+//     const requestedResources = { tokens: analysisCost, ai_analysis: 1 };
+//     const { allowed, message } = await TokenUsageService.enforceLimits(usage, plan, requestedResources);
+
+//     if (!allowed) {
+//       return res.status(403).json({
+//         error: `Document analysis failed: ${message}`,
+//         timeLeftUntilReset: timeLeft
+//       });
+//     }
+
+//     let insights;
+//     try {
+//       insights = await analyzeWithGemini(fullText);
+//       // 3. Increment usage after successful AI analysis
+//       await TokenUsageService.incrementUsage(userId, requestedResources, usage, plan);
+//     } catch (aiError) {
+//       console.error("❌ Gemini analysis error:", aiError);
+//       return res
+//         .status(500)
+//         .json({
+//           error: "Failed to get AI analysis.",
+//           details: aiError.message,
+//         });
+//     }
+
+//     return res.json(insights);
+//   } catch (error) {
+//     console.error("❌ analyzeDocument error:", error);
+//     return res.status(500).json({ error: "Failed to analyze document." });
+//   }
+// };
 exports.analyzeDocument = async (req, res) => {
+  const userId = req.user.id;
+  const authorizationHeader = req.headers.authorization;
+
   try {
     const { file_id } = req.body;
     if (!file_id)
@@ -197,7 +264,7 @@ exports.analyzeDocument = async (req, res) => {
 
     const file = await DocumentModel.getFileById(file_id);
     if (!file) return res.status(404).json({ error: "File not found." });
-    if (file.user_id !== req.user.id)
+    if (file.user_id !== userId)
       return res.status(403).json({ error: "Access denied." });
 
     if (file.status !== "processed") {
@@ -213,30 +280,22 @@ exports.analyzeDocument = async (req, res) => {
 
     const analysisCost = Math.ceil(fullText.length / 500);
 
-    // 🚨 TEMPORARY BYPASS: Token reservation and deduction bypassed for debugging.
-    console.warn(`⚠️ Token reservation bypassed for user ${req.user.id} for analysis.`);
-    // const tokensReserved = await TokenUsageService.checkAndReserveTokens(req.user.id, analysisCost);
-    // if (!tokensReserved) {
-    //   return res.status(403).json({ message: "User token limit is exceeded for document analysis." });
-    // }
+    const { userUsage, userPlan, requestedResources } = req;
+
+    // Enforce limits is already handled by middleware. If we reach here, it's allowed.
+    // The middleware also handles refetching usage if renewal occurred.
 
     let insights;
     try {
       insights = await analyzeWithGemini(fullText);
-      // 🚨 TEMPORARY BYPASS: Token commitment bypassed for debugging.
-      console.warn(`⚠️ Token commitment bypassed for user ${req.user.id} for analysis.`);
-      // await TokenUsageService.commitTokens(req.user.id, analysisCost, `Document analysis for file ${file_id}`);
+      // Increment usage after successful AI analysis
+      await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
     } catch (aiError) {
       console.error("❌ Gemini analysis error:", aiError);
-      // 🚨 TEMPORARY BYPASS: Token rollback bypassed for debugging.
-      console.warn(`⚠️ Token rollback bypassed for user ${req.user.id} for analysis.`);
-      // await TokenUsageService.rollbackTokens(req.user.id, analysisCost);
-      return res
-        .status(500)
-        .json({
-          error: "Failed to get AI analysis.",
-          details: aiError.message,
-        });
+      return res.status(500).json({
+        error: "Failed to get AI analysis.",
+        details: aiError.message,
+      });
     }
 
     return res.json(insights);
@@ -245,15 +304,104 @@ exports.analyzeDocument = async (req, res) => {
     return res.status(500).json({ error: "Failed to analyze document." });
   }
 };
-
 /**
  * @description Generates a summary for selected chunks of a document using AI.
  * @route POST /api/doc/summary
  */
+// exports.getSummary = async (req, res) => {
+//   const userId = req.user.id;
+//   const authorizationHeader = req.headers.authorization;
+
+//   try {
+//     const { file_id, selected_chunk_ids } = req.body;
+
+//     if (!file_id)
+//       return res.status(400).json({ error: "file_id is required." });
+//     if (!Array.isArray(selected_chunk_ids) || selected_chunk_ids.length === 0) {
+//       return res.status(400).json({ error: "No chunks selected for summary." });
+//     }
+
+//     const file = await DocumentModel.getFileById(file_id);
+//     if (!file || file.user_id !== userId) {
+//       return res
+//         .status(403)
+//         .json({ error: "Access denied or file not found." });
+//     }
+
+//     if (file.status !== "processed") {
+//       return res.status(400).json({
+//         error: "Document is still processing or failed.",
+//         status: file.status,
+//         progress: file.processing_progress,
+//       });
+//     }
+
+//     const fileChunks = await FileChunkModel.getChunksByFileId(file_id);
+//     const allowedIds = new Set(fileChunks.map((c) => c.id));
+//     const safeChunkIds = selected_chunk_ids.filter((id) => allowedIds.has(id));
+
+//     if (safeChunkIds.length === 0) {
+//       return res
+//         .status(400)
+//         .json({ error: "Selected chunks are invalid for this file." });
+//     }
+
+//     const selectedChunks = await FileChunkModel.getChunkContentByIds(
+//       safeChunkIds
+//     );
+//     const combinedText = selectedChunks
+//       .map((chunk) => chunk.content)
+//       .join("\n\n");
+
+//     if (!combinedText.trim()) {
+//       return res
+//         .status(400)
+//         .json({ error: "Selected chunks contain no readable content." });
+//     }
+
+//     const summaryCost = Math.ceil(combinedText.length / 200); // Rough token estimate
+
+//     // 1. Fetch user's usage and plan details
+//     const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+
+//     // 2. Enforce token limits for summary generation
+//     const requestedResources = { tokens: summaryCost, ai_analysis: 1 };
+//     const { allowed, message } = await TokenUsageService.enforceLimits(usage, plan, requestedResources);
+
+//     if (!allowed) {
+//       return res.status(403).json({
+//         error: `Summary generation failed: ${message}`,
+//         timeLeftUntilReset: timeLeft
+//       });
+//     }
+
+//     let summary;
+//     try {
+//       summary = await getSummaryFromChunks(combinedText);
+//       // 3. Increment usage after successful summary generation
+//       await TokenUsageService.incrementUsage(userId, requestedResources, usage, plan);
+//     } catch (aiError) {
+//       console.error("❌ Gemini summary error:", aiError);
+//       return res
+//         .status(500)
+//         .json({
+//           error: "Failed to generate summary.",
+//           details: aiError.message,
+//         });
+//     }
+
+//     return res.json({ summary, used_chunk_ids: safeChunkIds });
+//   } catch (error) {
+//     console.error("❌ Error generating summary:", error);
+//     return res.status(500).json({ error: "Failed to generate summary." });
+//   }
+// };
 exports.getSummary = async (req, res) => {
+  const userId = req.user.id;
+  const authorizationHeader = req.headers.authorization;
+
   try {
     const { file_id, selected_chunk_ids } = req.body;
-    const userId = req.user.id;
 
     if (!file_id)
       return res.status(400).json({ error: "file_id is required." });
@@ -263,9 +411,7 @@ exports.getSummary = async (req, res) => {
 
     const file = await DocumentModel.getFileById(file_id);
     if (!file || file.user_id !== userId) {
-      return res
-        .status(403)
-        .json({ error: "Access denied or file not found." });
+      return res.status(403).json({ error: "Access denied or file not found." });
     }
 
     if (file.status !== "processed") {
@@ -281,50 +427,34 @@ exports.getSummary = async (req, res) => {
     const safeChunkIds = selected_chunk_ids.filter((id) => allowedIds.has(id));
 
     if (safeChunkIds.length === 0) {
-      return res
-        .status(400)
-        .json({ error: "Selected chunks are invalid for this file." });
+      return res.status(400).json({ error: "Selected chunks are invalid for this file." });
     }
 
-    const selectedChunks = await FileChunkModel.getChunkContentByIds(
-      safeChunkIds
-    );
-    const combinedText = selectedChunks
-      .map((chunk) => chunk.content)
-      .join("\n\n");
+    const selectedChunks = await FileChunkModel.getChunkContentByIds(safeChunkIds);
+    const combinedText = selectedChunks.map((chunk) => chunk.content).join("\n\n");
 
     if (!combinedText.trim()) {
-      return res
-        .status(400)
-        .json({ error: "Selected chunks contain no readable content." });
+      return res.status(400).json({ error: "Selected chunks contain no readable content." });
     }
 
     const summaryCost = Math.ceil(combinedText.length / 200);
 
-    // 🚨 TEMPORARY BYPASS: Token reservation and deduction bypassed for debugging.
-    console.warn(`⚠️ Token reservation bypassed for user ${userId} for summary.`);
-    // const tokensReserved = await TokenUsageService.checkAndReserveTokens(userId, summaryCost);
-    // if (!tokensReserved) {
-    //   return res.status(403).json({ message: "User token limit is exceeded for summary generation." });
-    // }
+    const { userUsage, userPlan, requestedResources } = req;
+
+    // Enforce limits is already handled by middleware. If we reach here, it's allowed.
+    // The middleware also handles refetching usage if renewal occurred.
 
     let summary;
     try {
       summary = await getSummaryFromChunks(combinedText);
-      // 🚨 TEMPORARY BYPASS: Token commitment bypassed for debugging.
-      console.warn(`⚠️ Token commitment bypassed for user ${userId} for summary.`);
-      // await TokenUsageService.commitTokens(userId, summaryCost, `Summary generation for file ${file_id}`);
+      // Increment usage after successful summary generation
+      await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
     } catch (aiError) {
       console.error("❌ Gemini summary error:", aiError);
-      // 🚨 TEMPORARY BYPASS: Token rollback bypassed for debugging.
-      console.warn(`⚠️ Token rollback bypassed for user ${userId} for summary.`);
-      // await TokenUsageService.rollbackTokens(userId, summaryCost);
-      return res
-        .status(500)
-        .json({
-          error: "Failed to generate summary.",
-          details: aiError.message,
-        });
+      return res.status(500).json({
+        error: "Failed to generate summary.",
+        details: aiError.message,
+      });
     }
 
     return res.json({ summary, used_chunk_ids: safeChunkIds });
@@ -333,14 +463,141 @@ exports.getSummary = async (req, res) => {
     return res.status(500).json({ error: "Failed to generate summary." });
   }
 };
-
 /**
  * @description Allows users to chat with a document using AI, leveraging relevant chunks as context.
  * @route POST /api/doc/chat
  */
+// exports.chatWithDocument = async (req, res) => {
+//   let chatCost;
+//   let userId = null;
+//   const authorizationHeader = req.headers.authorization;
+
+//   try {
+//     const {
+//       file_id,
+//       question,
+//       used_secret_prompt = false,
+//       prompt_label = null,
+//       session_id = null, // ✅ allow frontend to pass session
+//     } = req.body;
+
+//     userId = req.user.id;
+
+//     // Validation
+//     const uuidRegex =
+//       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+//     if (!file_id || !question) {
+//       console.error("❌ Chat Error: file_id or question missing.");
+//       return res
+//         .status(400)
+//         .json({ error: "file_id and question are required." });
+//     }
+//     if (!uuidRegex.test(file_id)) {
+//       console.error(`❌ Chat Error: Invalid file ID format for file_id: ${file_id}`);
+//       return res.status(400).json({ error: "Invalid file ID format." });
+//     }
+
+//     // Check file access
+//     const file = await DocumentModel.getFileById(file_id);
+//     if (!file) return res.status(404).json({ error: "File not found." });
+//     if (String(file.user_id) !== String(userId)) {
+//       return res.status(403).json({ error: "Access denied." });
+//     }
+//     if (file.status !== "processed") {
+//       console.error(`❌ Chat Error: Document ${file_id} not yet processed. Current status: ${file.status}`);
+//       return res.status(400).json({
+//         error: "Document is not yet processed.",
+//         status: file.status,
+//         progress: file.processing_progress,
+//       });
+//     }
+
+//     // Build document text
+//     const allChunks = await FileChunkModel.getChunksByFileId(file_id);
+//     const documentFullText = allChunks.map((c) => c.content).join("\n\n");
+//     if (!documentFullText || documentFullText.trim() === "") {
+//       console.error(`❌ Chat Error: Document ${file_id} has no readable content.`);
+//       return res.status(400).json({ error: "Document has no readable content." });
+//     }
+
+//     // Token cost (rough estimate)
+//     chatCost = Math.ceil(question.length / 100) + Math.ceil(documentFullText.length / 200); // Question tokens + context tokens
+
+//     // 1. Fetch user's usage and plan details
+//     const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+
+//     // 2. Enforce token limits for AI chat
+//     const requestedResources = { tokens: chatCost, ai_analysis: 1 };
+//     const { allowed, message } = await TokenUsageService.enforceLimits(userId, usage, plan, requestedResources);
+
+//     if (!allowed) {
+//       return res.status(403).json({
+//         error: `AI chat failed: ${message}`,
+//         timeLeftUntilReset: timeLeft
+//       });
+//     }
+
+//     // Find context
+//     const questionEmbedding = await generateEmbedding(question);
+//     const relevantChunks = await ChunkVectorModel.findNearestChunks(
+//       questionEmbedding,
+//       5,
+//       file_id
+//     );
+//     const relevantChunkContents = relevantChunks.map((chunk) => chunk.content);
+//     const usedChunkIds = relevantChunks.map((chunk) => chunk.chunk_id);
+
+//     let answer;
+//     if (relevantChunkContents.length === 0) {
+//       answer = await askGemini(
+//         "No relevant context found in the document.",
+//         question
+//       );
+//     } else {
+//       const context = relevantChunkContents.join("\n\n");
+//       answer = await askGemini(context, question);
+//     }
+
+//     // Store chat
+//     const storedQuestion = used_secret_prompt
+//       ? `[${prompt_label || "Secret Prompt"}]`
+//       : question;
+
+//     const savedChat = await FileChat.saveChat(
+//       file_id,
+//       userId,
+//       storedQuestion,
+//       answer,
+//       session_id, // ✅ if null, new session is created in saveChat
+//       usedChunkIds,
+//       used_secret_prompt,
+//       used_secret_prompt ? prompt_label : null
+//     );
+
+//     // 3. Increment usage after successful AI chat
+//     await TokenUsageService.incrementUsage(userId, requestedResources, usage, plan);
+
+//     // ✅ Fetch full session history so frontend gets all messages live
+//     const history = await FileChat.getChatHistory(file_id, savedChat.session_id);
+
+//     return res.json({
+//       session_id: savedChat.session_id,
+//       answer,
+//       history, // ✅ full conversation thread
+//     });
+//   } catch (error) {
+//     console.error("❌ Error chatting with document:", error);
+//     // If an error occurs after token check but before increment, we should ideally roll back.
+//     // For now, we'll just log the error.
+//     return res
+//       .status(500)
+//       .json({ error: "Failed to get AI answer.", details: error.message });
+//   }
+// };
+
 exports.chatWithDocument = async (req, res) => {
-  let chatCost;
   let userId = null;
+  const authorizationHeader = req.headers.authorization;
 
   try {
     const {
@@ -348,19 +605,16 @@ exports.chatWithDocument = async (req, res) => {
       question,
       used_secret_prompt = false,
       prompt_label = null,
-      session_id = null, // ✅ allow frontend to pass session
+      session_id = null,
     } = req.body;
 
     userId = req.user.id;
 
     // Validation
-    const uuidRegex =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!file_id || !question) {
       console.error("❌ Chat Error: file_id or question missing.");
-      return res
-        .status(400)
-        .json({ error: "file_id and question are required." });
+      return res.status(400).json({ error: "file_id and question are required." });
     }
     if (!uuidRegex.test(file_id)) {
       console.error(`❌ Chat Error: Invalid file ID format for file_id: ${file_id}`);
@@ -391,32 +645,22 @@ exports.chatWithDocument = async (req, res) => {
     }
 
     // Token cost
-    const chatContentLength = question.length + documentFullText.length;
-    chatCost = Math.ceil(chatContentLength / 100);
+    const chatCost = Math.ceil(question.length / 100) + Math.ceil(documentFullText.length / 200);
 
-    // 🚨 TEMPORARY BYPASS: Token reservation and deduction bypassed for debugging.
-    console.warn(`⚠️ Token reservation bypassed for user ${userId}.`);
-    // const tokensReserved = await TokenUsageService.checkAndReserveTokens(userId, chatCost);
-    // if (!tokensReserved) {
-    //   return res.status(403).json({ message: "Token limit exceeded." });
-    // }
+    const { userUsage, userPlan, requestedResources } = req;
+
+    // Enforce limits is already handled by middleware. If we reach here, it's allowed.
+    // The middleware also handles refetching usage if renewal occurred.
 
     // Find context
     const questionEmbedding = await generateEmbedding(question);
-    const relevantChunks = await ChunkVectorModel.findNearestChunks(
-      questionEmbedding,
-      5,
-      file_id
-    );
+    const relevantChunks = await ChunkVectorModel.findNearestChunks(questionEmbedding, 5, file_id);
     const relevantChunkContents = relevantChunks.map((chunk) => chunk.content);
     const usedChunkIds = relevantChunks.map((chunk) => chunk.chunk_id);
 
     let answer;
     if (relevantChunkContents.length === 0) {
-      answer = await askGemini(
-        "No relevant context found in the document.",
-        question
-      );
+      answer = await askGemini("No relevant context found in the document.", question);
     } else {
       const context = relevantChunkContents.join("\n\n");
       answer = await askGemini(context, question);
@@ -432,39 +676,28 @@ exports.chatWithDocument = async (req, res) => {
       userId,
       storedQuestion,
       answer,
-      session_id, // ✅ if null, new session is created in saveChat
+      session_id,
       usedChunkIds,
       used_secret_prompt,
       used_secret_prompt ? prompt_label : null
     );
 
-    // Commit tokens
-    // 🚨 TEMPORARY BYPASS: Token commitment bypassed for debugging.
-    console.warn(`⚠️ Token commitment bypassed for user ${userId}.`);
-    // await TokenUsageService.commitTokens(userId, chatCost, `AI chat for document ${file_id}`);
+    // Increment usage after successful AI chat
+    await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
 
-    // ✅ Fetch full session history so frontend gets all messages live
+    // Fetch full session history
     const history = await FileChat.getChatHistory(file_id, savedChat.session_id);
 
     return res.json({
       session_id: savedChat.session_id,
       answer,
-      history, // ✅ full conversation thread
+      history,
     });
   } catch (error) {
     console.error("❌ Error chatting with document:", error);
-    if (chatCost && userId) {
-      // 🚨 TEMPORARY BYPASS: Token rollback bypassed for debugging.
-      console.warn(`⚠️ Token rollback bypassed for user ${userId}.`);
-      // await TokenUsageService.rollbackTokens(userId, chatCost, "Token rollback due to error");
-    }
-    return res
-      .status(500)
-      .json({ error: "Failed to get AI answer.", details: error.message });
+    return res.status(500).json({ error: "Failed to get AI answer.", details: error.message });
   }
 };
-
-
 /**
  * @description Saves edited HTML content of a document by converting it to DOCX and PDF, then uploading to GCS.
  * @route POST /api/doc/save
@@ -835,126 +1068,282 @@ exports.getDocumentProcessingStatus = async (req, res) => {
  * @description Initiates a batch upload and processing of a large document using Document AI.
  * @route POST /api/doc/batch-upload
  */
-exports.batchUploadDocument = async (req, res) => {
+// exports.batchUploadDocument = async (req, res) => {
+//   const userId = req.user.id;
+//   const authorizationHeader = req.headers.authorization;
+
+//   try {
+//     console.log(`[batchUploadDocument] Received batch upload request.`);
+//     if (!userId) {
+//       return res.status(401).json({ error: "Unauthorized" });
+//     }
+
+//     const file = req.file;
+//     if (!file || !file.buffer) {
+//       return res
+//         .status(400)
+//         .json({ error: "No file uploaded or invalid file data." });
+//     }
+
+//     // 1. Fetch user's usage and plan details
+//     const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+
+//     // 2. Enforce limits for document upload
+//     const requestedResources = {
+//       tokens: DOCUMENT_UPLOAD_COST_TOKENS,
+//       documents: 1,
+//       storage_gb: file.size / (1024 * 1024 * 1024), // Convert bytes to GB
+//     };
+//     const { allowed, message } = await TokenUsageService.enforceLimits(userId, usage, plan, requestedResources);
+
+//     if (!allowed) {
+//       return res.status(403).json({
+//         error: `Document upload failed: ${message}`,
+//         timeLeftUntilReset: timeLeft
+//       });
+//     }
+
+//     const originalFilename = file.originalname;
+//     const mimeType = file.mimetype;
+
+//     const batchUploadFolder = `batch-uploads/${userId}/${uuidv4()}`;
+//     const { gsUri: gcsInputUri, gcsPath: folderPath } = await uploadToGCS(
+//       originalFilename,
+//       file.buffer,
+//       batchUploadFolder,
+//       true,
+//       mimeType
+//     );
+
+//     const outputPrefix = `document-ai-results/${userId}/${uuidv4()}/`;
+//     const gcsOutputUriPrefix = `gs://${fileOutputBucket.name}/${outputPrefix}`;
+
+//     const operationName = await batchProcessDocument(
+//       [gcsInputUri],
+//       gcsOutputUriPrefix,
+//       mimeType
+//     );
+//     console.log(`📄 Started Document AI batch operation: ${operationName}`);
+
+//     const fileId = await DocumentModel.saveFileMetadata(
+//       userId,
+//       originalFilename,
+//       gcsInputUri,
+//       folderPath,
+//       mimeType,
+//       file.size,
+//       "batch_queued"
+//     );
+//     console.log(`[batchUploadDocument] Saved file metadata with ID: ${fileId}`);
+
+//     const jobId = uuidv4();
+//     await ProcessingJobModel.createJob({
+//       job_id: jobId,
+//       file_id: fileId,
+//       type: "batch",
+//       gcs_input_uri: gcsInputUri,
+//       gcs_output_uri_prefix: gcsOutputUriPrefix,
+//       document_ai_operation_name: operationName,
+//       status: "queued",
+//     });
+
+//     await DocumentModel.updateFileStatus(fileId, "batch_processing", 0.0);
+
+//     // 3. Increment usage after successful upload and processing initiation
+//     await TokenUsageService.incrementUsage(userId, requestedResources, usage, plan);
+
+//     return res.status(202).json({
+//       file_id: fileId,
+//       job_id: jobId,
+//       message: "Batch document upload successful; processing initiated.",
+//       operation_name: operationName,
+//       gcs_input_uri: gcsInputUri,
+//       gcs_output_uri_prefix: gcsOutputUriPrefix,
+//     });
+//   } catch (error) {
+//     console.error("❌ Batch Upload Error:", error);
+//     return res.status(500).json({
+//       error: "Failed to initiate batch processing",
+//       details: error.message,
+//     });
+//   }
+// };
+// exports.batchUploadDocument = async (req, res) => {
+//   const userId = req.user.id;
+//   const authorizationHeader = req.headers.authorization;
+
+//   try {
+//     console.log(`[batchUploadDocument] Received batch upload request.`);
+//     if (!userId) {
+//       return res.status(401).json({ error: "Unauthorized" });
+//     }
+
+//     const file = req.file;
+//     if (!file || !file.buffer) {
+//       return res.status(400).json({ error: "No file uploaded or invalid file data." });
+//     }
+
+//     const { userUsage, userPlan, requestedResources } = req;
+
+//     // Enforce limits is already handled by middleware. If we reach here, it's allowed.
+//     // The middleware also handles refetching usage if renewal occurred.
+
+//     const originalFilename = file.originalname;
+//     const mimeType = file.mimetype;
+
+//     const batchUploadFolder = `batch-uploads/${userId}/${uuidv4()}`;
+//     const { gsUri: gcsInputUri, gcsPath: folderPath } = await uploadToGCS(
+//       originalFilename,
+//       file.buffer,
+//       batchUploadFolder,
+//       true,
+//       mimeType
+//     );
+
+//     const outputPrefix = `document-ai-results/${userId}/${uuidv4()}/`;
+//     const gcsOutputUriPrefix = `gs://${fileOutputBucket.name}/${outputPrefix}`;
+
+//     const operationName = await batchProcessDocument([gcsInputUri], gcsOutputUriPrefix, mimeType);
+//     console.log(`📄 Started Document AI batch operation: ${operationName}`);
+
+//     const fileId = await DocumentModel.saveFileMetadata(
+//       userId,
+//       originalFilename,
+//       gcsInputUri,
+//       folderPath,
+//       mimeType,
+//       file.size,
+//       "batch_queued"
+//     );
+//     console.log(`[batchUploadDocument] Saved file metadata with ID: ${fileId}`);
+
+//     const jobId = uuidv4();
+//     await ProcessingJobModel.createJob({
+//       job_id: jobId,
+//       file_id: fileId,
+//       type: "batch",
+//       gcs_input_uri: gcsInputUri,
+//       gcs_output_uri_prefix: gcsOutputUriPrefix,
+//       document_ai_operation_name: operationName,
+//       status: "queued",
+//     });
+
+//     await DocumentModel.updateFileStatus(fileId, "batch_processing", 0.0);
+
+//     // Increment usage after successful upload
+//     await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
+
+//     return res.status(202).json({
+//       file_id: fileId,
+//       job_id: jobId,
+//       message: "Batch document upload successful; processing initiated.",
+//       operation_name: operationName,
+//       gcs_input_uri: gcsInputUri,
+//       gcs_output_uri_prefix: gcsOutputUriPrefix,
+//     });
+//   } catch (error) {
+//     console.error("❌ Batch Upload Error:", error);
+//     return res.status(500).json({
+//       error: "Failed to initiate batch processing",
+//       details: error.message,
+//     });
+//   }
+// };
+
+
+exports.batchUploadDocuments = async (req, res) => {
+  const userId = req.user.id;
+  const authorizationHeader = req.headers.authorization;
+
   try {
-    console.log(`[batchUploadDocument] Received batch upload request.`);
-    if (!req.user?.id) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
+    console.log(`[batchUploadDocuments] Received batch upload request.`);
 
-    const userId = req.user.id;
-    const authorizationHeader = req.headers.authorization;
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    if (!req.files || req.files.length === 0)
+      return res.status(400).json({ error: "No files uploaded." });
 
-    // 🚨 TEMPORARY BYPASS: Payment Service subscription/token status check removed for debugging.
-    // This block was originally responsible for verifying active subscriptions and token balances.
-    console.warn(`⚠️ Payment Service subscription/token check bypassed for user ${userId}.`);
-    /*
-    try {
-      const paymentServiceUrl = process.env.PAYMENT_SERVICE_URL || "http://localhost:5003";
-      const paymentResponse = await axios.get(`${paymentServiceUrl}/api/payments/history`, {
-        headers: {
-          Authorization: authorizationHeader,
-        },
-      });
+    const { userUsage, userPlan, requestedResources } = req;
 
-      const paymentData = paymentResponse.data.data;
-      let isSubscribed = false;
-      let currentTokenBalance = 0;
-      let planTokenLimit = 0;
+    const uploadedFiles = [];
+    for (const file of req.files) {
+      try {
+        const originalFilename = file.originalname;
+        const mimeType = file.mimetype;
 
-      if (paymentData && paymentData.length > 0) {
-        const activeSubscription = paymentData.find(sub => sub.subscription_status === 'active');
-        if (activeSubscription) {
-          isSubscribed = true;
-          currentTokenBalance = activeSubscription.current_token_balance;
-          planTokenLimit = activeSubscription.plan_token_limit;
-        }
-      }
+        const batchUploadFolder = `batch-uploads/${userId}/${uuidv4()}`;
+        const { gsUri: gcsInputUri, gcsPath: folderPath } = await uploadToGCS(
+          originalFilename,
+          file.buffer,
+          batchUploadFolder,
+          true,
+          mimeType
+        );
 
-      if (!isSubscribed || currentTokenBalance <= 0) {
-        return res.status(403).json({
-          error: "Subscription required or insufficient tokens to process document.",
-          details: { isSubscribed, currentTokenBalance, planTokenLimit }
+        const outputPrefix = `document-ai-results/${userId}/${uuidv4()}/`;
+        const gcsOutputUriPrefix = `gs://${fileOutputBucket.name}/${outputPrefix}`;
+
+        // Start DocAI Batch Operation
+        const operationName = await batchProcessDocument(
+          [gcsInputUri],
+          gcsOutputUriPrefix,
+          mimeType
+        );
+        console.log(`📄 Started Document AI batch operation: ${operationName}`);
+
+        // Save file metadata
+        const fileId = await DocumentModel.saveFileMetadata(
+          userId,
+          originalFilename,
+          gcsInputUri,
+          folderPath,
+          mimeType,
+          file.size,
+          "batch_queued"
+        );
+        console.log(`[batchUploadDocuments] Saved file metadata ID: ${fileId}`);
+
+        // Create job entry
+        const jobId = uuidv4();
+        await ProcessingJobModel.createJob({
+          job_id: jobId,
+          file_id: fileId,
+          type: "batch",
+          gcs_input_uri: gcsInputUri,
+          gcs_output_uri_prefix: gcsOutputUriPrefix,
+          document_ai_operation_name: operationName,
+          status: "queued",
+        });
+
+        await DocumentModel.updateFileStatus(fileId, "batch_processing", 0.0);
+
+        uploadedFiles.push({
+          file_id: fileId,
+          job_id: jobId,
+          filename: originalFilename,
+          operation_name: operationName,
+          gcs_input_uri: gcsInputUri,
+          gcs_output_uri_prefix: gcsOutputUriPrefix,
+        });
+      } catch (innerError) {
+        console.error(`❌ Error processing ${file.originalname}:`, innerError);
+        uploadedFiles.push({
+          filename: file.originalname,
+          error: innerError.message,
         });
       }
-      console.log(`✅ User ${userId} has active subscription with ${currentTokenBalance} tokens.`);
-
-    } catch (paymentError) {
-      console.error("❌ Document Service: Error checking payment status:", paymentError.message);
-      if (paymentError.response) {
-        console.error("Payment Service Response:", paymentError.response.status, paymentError.response.data);
-        return res.status(paymentError.response.status).json({
-          error: "Failed to verify subscription with payment service.",
-          details: paymentError.response.data,
-        });
-      }
-      return res.status(500).json({
-        error: "Failed to communicate with payment service.",
-        details: paymentError.message,
-      });
-    }
-    */
-
-    const file = req.file;
-    if (!file || !file.buffer) {
-      return res
-        .status(400)
-        .json({ error: "No file uploaded or invalid file data." });
     }
 
-    const originalFilename = file.originalname;
-    const mimeType = file.mimetype;
-
-    const batchUploadFolder = `batch-uploads/${userId}/${uuidv4()}`;
-    const { gsUri: gcsInputUri, gcsPath: folderPath } = await uploadToGCS(
-      originalFilename,
-      file.buffer,
-      batchUploadFolder,
-      true,
-      mimeType
-    );
-
-    const outputPrefix = `document-ai-results/${userId}/${uuidv4()}/`;
-    const gcsOutputUriPrefix = `gs://${fileOutputBucket.name}/${outputPrefix}`;
-
-    const operationName = await batchProcessDocument(
-      [gcsInputUri],
-      gcsOutputUriPrefix,
-      mimeType
-    );
-    console.log(`📄 Started Document AI batch operation: ${operationName}`);
-
-    const fileId = await DocumentModel.saveFileMetadata(
+    // Increment usage after successful upload(s)
+    await TokenUsageService.incrementUsage(
       userId,
-      originalFilename,
-      gcsInputUri,
-      folderPath,
-      mimeType,
-      file.size,
-      "batch_queued"
+      requestedResources,
+      userUsage,
+      userPlan
     );
-    console.log(`[batchUploadDocument] Saved file metadata with ID: ${fileId}`);
-
-    const jobId = uuidv4();
-    await ProcessingJobModel.createJob({
-      job_id: jobId,
-      file_id: fileId,
-      type: "batch",
-      gcs_input_uri: gcsInputUri,
-      gcs_output_uri_prefix: gcsOutputUriPrefix,
-      document_ai_operation_name: operationName,
-      status: "queued",
-    });
-
-    await DocumentModel.updateFileStatus(fileId, "batch_processing", 0.0);
 
     return res.status(202).json({
-      file_id: fileId,
-      job_id: jobId,
       message: "Batch document upload successful; processing initiated.",
-      operation_name: operationName,
-      gcs_input_uri: gcsInputUri,
-      gcs_output_uri_prefix: gcsOutputUriPrefix,
+      uploaded_files: uploadedFiles,
     });
   } catch (error) {
     console.error("❌ Batch Upload Error:", error);
@@ -964,6 +1353,7 @@ exports.batchUploadDocument = async (req, res) => {
     });
   }
 };
+
 
 /**
  * @description Retrieves the total storage utilization for the authenticated user.
@@ -988,6 +1378,38 @@ exports.getUserStorageUtilization = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error fetching user storage utilization:', error);
+    res.status(500).json({ message: 'Internal server error', error: error.message });
+  }
+};
+
+/**
+ * @description Retrieves user's current usage and plan details from the Document Service.
+ * This endpoint is intended to be called by the Payment Service.
+ * @route GET /api/doc/user-usage-and-plan/:userId
+ */
+exports.getUserUsageAndPlan = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const authorizationHeader = req.headers.authorization; // Pass through auth header
+
+    if (!userId) {
+      return res.status(400).json({ error: "User ID is required." });
+    }
+
+    // Call the TokenUsageService to get the combined usage and plan data
+    const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        usage,
+        plan,
+        timeLeft
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching user usage and plan:', error);
     res.status(500).json({ message: 'Internal server error', error: error.message });
   }
 };

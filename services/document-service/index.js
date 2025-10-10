@@ -116,7 +116,7 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 // CORS setup
-const allowedOrigins = ["https://nexintel.netlify.app"];
+const allowedOrigins = ["http://localhost:5173"];
 app.use(cors({
   origin: allowedOrigins,
   credentials: true

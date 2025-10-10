@@ -34,6 +34,7 @@ const {
 const { chunkDocument } = require("../services/chunkingService");
 const { generateEmbedding, generateEmbeddings } = require("../services/embeddingService");
 const { fileInputBucket, fileOutputBucket } = require("../config/gcs");
+const TokenUsageService = require("../services/tokenUsageService"); // Import TokenUsageService
 
 /* ----------------- Helpers ----------------- */
 function sanitizeName(name) {
@@ -277,20 +278,47 @@ exports .getFolders = async (req, res) => {
 
 /* ----------------- Upload Multiple Docs ----------------- */
 exports.uploadDocuments = async (req, res) => {
+  const userId = req.user.id;
+  const authorizationHeader = req.headers.authorization;
+
   try {
     const { folderName } = req.params;
-    const userId = req.user.id;
 
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: "No files uploaded" });
     }
 
+    // 1. Fetch user's usage and plan details
+    const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+
     const safeFolder = sanitizeName(folderName);
     const uploadedFiles = [];
 
     for (const file of req.files) {
+      // Check file size limit (existing check)
       if (file.size > 50 * 1024 * 1024) {
-        return res.status(413).json({ error: `${file.originalname} too large` });
+        uploadedFiles.push({
+          originalname: file.originalname,
+          error: `${file.originalname} too large (max 50MB).`,
+          status: "failed"
+        });
+        continue; // Skip this file, try next
+      }
+
+      // 2. Enforce limits for each file
+      const requestedResources = {
+        documents: 1,
+        storage_gb: file.size / (1024 * 1024 * 1024), // Convert bytes to GB
+      };
+      const { allowed, message } = await TokenUsageService.enforceLimits(usage, plan, requestedResources);
+
+      if (!allowed) {
+        uploadedFiles.push({
+          originalname: file.originalname,
+          error: message,
+          status: "failed"
+        });
+        continue; // Skip this file, try next
       }
 
       const ext = mime.extension(file.mimetype) || "";
@@ -318,6 +346,9 @@ exports.uploadDocuments = async (req, res) => {
         processing_progress: 0,
       });
 
+      // 3. Increment usage after successful upload and metadata save
+      await TokenUsageService.incrementUsage(userId, requestedResources);
+
       processDocumentWithAI(savedFile.id, file.buffer, file.mimetype, userId, safeName).catch((err) =>
         console.error(`❌ Background processing failed for ${savedFile.id}:`, err.message)
       );
@@ -327,13 +358,22 @@ exports.uploadDocuments = async (req, res) => {
       uploadedFiles.push({
         ...savedFile,
         previewUrl,
+        status: "uploaded_and_queued"
       });
     }
 
-    return res.status(201).json({
-      message: "Documents uploaded and processing started",
-      documents: uploadedFiles,
-    });
+    if (uploadedFiles.some(f => f.status === "uploaded_and_queued")) {
+      return res.status(201).json({
+        message: "Documents uploaded and processing started. Some may have been skipped due to limits.",
+        documents: uploadedFiles,
+      });
+    } else {
+      return res.status(403).json({
+        error: "No documents could be uploaded due to plan limits or size restrictions.",
+        documents: uploadedFiles,
+        timeLeftUntilReset: timeLeft // Provide time left for user feedback
+      });
+    }
   } catch (error) {
     console.error("❌ uploadDocuments error:", error);
     res.status(500).json({ error: "Internal server error", details: error.message });
@@ -342,9 +382,14 @@ exports.uploadDocuments = async (req, res) => {
 
 /* ----------------- Enhanced Folder Summary ----------------- */
 exports.getFolderSummary = async (req, res) => {
+  const userId = req.user.id;
+  const authorizationHeader = req.headers.authorization;
+
   try {
     const { folderName } = req.params;
-    const userId = req.user.id;
+
+    // 1. Fetch user's usage and plan details
+    const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
 
     const files = await File.findByUserIdAndFolderPath(userId, folderName);
     console.log(`[getFolderSummary] Found files in folder '${folderName}' for user ${userId}:`, files.map(f => ({ id: f.id, originalname: f.originalname, status: f.status })));
@@ -371,7 +416,24 @@ exports.getFolderSummary = async (req, res) => {
       });
     }
 
+    // Calculate token cost for summary generation
+    const summaryCost = Math.ceil(combinedText.length / 200); // Rough estimate
+
+    // 2. Enforce token limits for summary generation
+    const requestedResources = { tokens: summaryCost, ai_analysis: 1 };
+    const { allowed, message } = await TokenUsageService.enforceLimits(usage, plan, requestedResources);
+
+    if (!allowed) {
+      return res.status(403).json({
+        error: `Summary generation failed: ${message}`,
+        timeLeftUntilReset: timeLeft
+      });
+    }
+
     const summary = await getSummaryFromChunks(combinedText);
+
+    // 3. Increment usage after successful summary generation
+    await TokenUsageService.incrementUsage(userId, requestedResources);
 
     const savedChat = await FolderChat.saveFolderChat(
       userId,
@@ -829,6 +891,7 @@ exports.getFolderSummary = async (req, res) => {
 exports.queryFolderDocuments = async (req, res) => {
   let chatCost;
   let userId = null;
+  const authorizationHeader = req.headers.authorization;
 
   try {
     const { folderName } = req.params;
@@ -855,6 +918,9 @@ exports.queryFolderDocuments = async (req, res) => {
     console.log(`[chatWithFolder] Question length: ${question.length}`);
     console.log(`[chatWithFolder] Used secret prompt: ${used_secret_prompt}`);
     console.log(`[chatWithFolder] Prompt label: ${prompt_label}`);
+
+    // 1. Fetch user's usage and plan details
+    const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
 
     // Get processed files in folder
     const files = await File.findByUserIdAndFolderPath(userId, folderName);
@@ -886,9 +952,18 @@ exports.queryFolderDocuments = async (req, res) => {
     }
 
     // Token cost (rough estimate)
-    const chatContentLength = question.length + allChunks.reduce((sum, c) => sum + c.content.length, 0);
-    chatCost = Math.ceil(chatContentLength / 100);
-    console.warn(`⚠️ Token reservation bypassed for user ${userId}.`);
+    chatCost = Math.ceil(question.length / 100) + Math.ceil(allChunks.reduce((sum, c) => sum + c.content.length, 0) / 200); // Question tokens + context tokens
+    
+    // 2. Enforce token limits for AI analysis
+    const requestedResources = { tokens: chatCost, ai_analysis: 1 };
+    const { allowed, message } = await TokenUsageService.enforceLimits(usage, plan, requestedResources);
+
+    if (!allowed) {
+      return res.status(403).json({
+        error: `AI chat failed: ${message}`,
+        timeLeftUntilReset: timeLeft
+      });
+    }
 
     // Find context using the FULL question (even if it's a secret prompt)
     const questionEmbedding = await generateEmbedding(question);
@@ -913,42 +988,40 @@ exports.queryFolderDocuments = async (req, res) => {
       answer = await askGemini(context, question);  // Use full question for AI
     }
 
-    // ============ CRITICAL FIX ============
     // Determine what to store in the database:
     // - If secret prompt: store the SHORT label
     // - If regular question: store the full question
     const questionToStore = used_secret_prompt ? prompt_label : question;
     
     console.log(`[chatWithFolder] Storing in DB: "${questionToStore}"`);
-    // =====================================
 
     const savedChat = await FolderChat.saveFolderChat(
       userId,
       folderName,
-      questionToStore,              // ✅ Store ONLY the label if secret prompt
+      questionToStore,              // Store ONLY the label if secret prompt
       answer,
       session_id,
       processedFiles.map(f => f.id)
     );
 
-    console.warn(`⚠️ Token commitment bypassed for user ${userId}.`);
+    // 3. Increment usage after successful AI chat
+    await TokenUsageService.incrementUsage(userId, requestedResources);
 
     // Fetch full session history
     const history = await FolderChat.getFolderChatHistory(
-      userId, 
-      folderName, 
+      userId,
+      folderName,
       savedChat.session_id
     );
 
-    // ============ CRITICAL FIX ============
     // Map history to ensure proper field names for frontend
     const mappedHistory = history.map(chat => ({
       id: chat.id,
       question: chat.question,              // This will be the label if secret prompt
       displayQuestion: chat.used_secret_prompt ? chat.prompt_label : chat.question,
-      response: chat.answer,                // ✅ Add 'response' field
-      answer: chat.answer,                  // ✅ Keep 'answer' field
-      message: chat.answer,                 // ✅ Add 'message' field for fallback
+      response: chat.answer,                // Add 'response' field
+      answer: chat.answer,                  // Keep 'answer' field
+      message: chat.answer,                 // Add 'message' field for fallback
       timestamp: chat.created_at,
       session_id: chat.session_id,
       used_secret_prompt: chat.used_secret_prompt,
@@ -956,24 +1029,22 @@ exports.queryFolderDocuments = async (req, res) => {
       used_chunk_ids: chat.used_chunk_ids,
       summarized_file_ids: chat.summarized_file_ids
     }));
-    // =====================================
 
     console.log(`[chatWithFolder] ✅ Response prepared with ${mappedHistory.length} messages`);
 
     return res.json({
-      sessionId: savedChat.session_id,      // ✅ Use camelCase
-      session_id: savedChat.session_id,     // ✅ Also keep snake_case for compatibility
-      answer,                                // ✅ Latest answer
-      response: answer,                      // ✅ Also as 'response'
-      chatHistory: mappedHistory,            // ✅ Use camelCase
-      history: mappedHistory                 // ✅ Also keep 'history' for compatibility
+      sessionId: savedChat.session_id,      // Use camelCase
+      session_id: savedChat.session_id,     // Also keep snake_case for compatibility
+      answer,                                // Latest answer
+      response: answer,                      // Also as 'response'
+      chatHistory: mappedHistory,            // Use camelCase
+      history: mappedHistory                 // Also keep 'history' for compatibility
     });
 
   } catch (error) {
     console.error("❌ Error chatting with folder:", error);
-    if (chatCost && userId) {
-      console.warn(`⚠️ Token rollback bypassed for user ${userId}.`);
-    }
+    // If an error occurs after token check but before increment, we should ideally roll back.
+    // For now, we'll just log the error.
     return res
       .status(500)
       .json({ error: "Failed to get AI answer.", details: error.message });
@@ -1358,10 +1429,13 @@ exports.getFolderChatSessions = async (req, res) => {
 
 /* ----------------- Continue Folder Chat Session ----------------- */
 exports.continueFolderChat = async (req, res) => {
+  let chatCost;
+  const userId = req.user.id;
+  const authorizationHeader = req.headers.authorization;
+
   try {
     const { folderName, sessionId } = req.params;
     const { question, maxResults = 10 } = req.body;
-    const userId = req.user.id;
 
     if (!question) {
       return res.status(400).json({ error: "Question is required" });
@@ -1370,21 +1444,24 @@ exports.continueFolderChat = async (req, res) => {
     console.log(`[continueFolderChat] Continuing session ${sessionId} for folder: ${folderName}`);
     console.log(`[continueFolderChat] New question: ${question}`);
 
+    // 1. Fetch user's usage and plan details
+    const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+
     // Verify session exists and get chat history
     const existingChats = await FolderChat.findAll({
       where: {
         user_id: userId,
-        folder_name: folderName, // Changed from folder_id to folder_name
+        folder_name: folderName,
         session_id: sessionId
       },
       order: [["created_at", "ASC"]],
     });
 
     if (existingChats.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: "Chat session not found. Please start a new conversation.",
         folderName,
-        sessionId 
+        sessionId
       });
     }
 
@@ -1395,7 +1472,7 @@ exports.continueFolderChat = async (req, res) => {
     console.log(`[continueFolderChat] Found ${processedFiles.length} processed files in folder ${folderName}`);
     
     if (processedFiles.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: "No processed documents in folder",
         sessionId,
         chatHistory: existingChats.map(chat => ({
@@ -1455,6 +1532,20 @@ exports.continueFolderChat = async (req, res) => {
       .map(chat => `Q: ${chat.question}\nA: ${chat.response}`)
       .join('\n\n---\n\n');
 
+    // Token cost (rough estimate)
+    chatCost = Math.ceil(question.length / 100) + Math.ceil(allChunks.reduce((sum, c) => sum + c.content.length, 0) / 200) + Math.ceil(conversationContext.length / 200); // Question tokens + context tokens + history tokens
+    
+    // 2. Enforce token limits for AI analysis
+    const requestedResources = { tokens: chatCost, ai_analysis: 1 };
+    const { allowed, message } = await TokenUsageService.enforceLimits(usage, plan, requestedResources);
+
+    if (!allowed) {
+      return res.status(403).json({
+        error: `AI chat failed: ${message}`,
+        timeLeftUntilReset: timeLeft
+      });
+    }
+
     // Use keyword-based search for the new question
     const questionLower = question.toLowerCase();
     const questionWords = questionLower
@@ -1509,22 +1600,22 @@ exports.continueFolderChat = async (req, res) => {
     console.log(`[continueFolderChat] Found ${relevantChunks.length} relevant chunks`);
 
     // Prepare context for AI with conversation history
-    const contextText = relevantChunks.map((chunk, index) => 
+    const contextText = relevantChunks.map((chunk, index) =>
       `[Document: ${chunk.filename} - Page ${chunk.page_start || 'N/A'}]\n${chunk.content.substring(0, 2000)}`
     ).join("\n\n---\n\n");
 
     // Enhanced prompt with conversation context
     const prompt = `
-You are an AI assistant continuing a conversation about documents in folder "${folderName}". 
-
+You are an AI assistant continuing a conversation about documents in folder "${folderName}".
+ 
 PREVIOUS CONVERSATION:
 ${conversationContext}
-
+ 
 CURRENT QUESTION: "${question}"
-
+ 
 RELEVANT DOCUMENT CONTENT:
 ${contextText}
-
+ 
 INSTRUCTIONS:
 1. Consider the conversation history when answering the current question
 2. If the question refers to previous responses (e.g., "tell me more about that", "what else", "can you elaborate"), use the conversation context
@@ -1533,9 +1624,9 @@ INSTRUCTIONS:
 5. If information spans multiple documents, clearly indicate which documents contain what information
 6. Maintain conversational flow and reference previous parts of the conversation when relevant
 7. Be thorough and helpful - synthesize information across all relevant documents
-
+ 
 Provide your answer:`;
-
+ 
     const answer = await queryFolderWithGemini(prompt);
     console.log(`[continueFolderChat] Generated answer length: ${answer.length} characters`);
 
@@ -1548,6 +1639,9 @@ Provide your answer:`;
       sessionId,
       processedFiles.map(f => f.id)
     );
+
+    // 3. Increment usage after successful AI chat
+    await TokenUsageService.incrementUsage(userId, requestedResources);
 
     // Prepare sources with detail
     const sources = relevantChunks.map(chunk => ({
@@ -1583,9 +1677,11 @@ Provide your answer:`;
 
   } catch (error) {
     console.error("❌ continueFolderChat error:", error);
-    res.status(500).json({ 
-      error: "Failed to continue chat", 
-      details: error.message 
+    // If an error occurs after token check but before increment, we should ideally roll back.
+    // For now, we'll just log the error.
+    res.status(500).json({
+      error: "Failed to continue chat",
+      details: error.message
     });
   }
 };

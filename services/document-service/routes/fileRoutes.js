@@ -4,6 +4,7 @@ const router = express.Router();
 const multer = require("multer");
 const fileController = require("../controllers/FileController");
 const authMiddleware = require("../middleware/auth"); // Import auth middleware
+const { checkDocumentUploadLimits } = require("../middleware/checkTokenLimits"); // Import the new middleware
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -14,7 +15,7 @@ router.post("/create-folder", authMiddleware.protect, fileController.createFolde
 router.get("/folders", authMiddleware.protect, fileController.getFolders);
 
 // Upload multiple docs to folder
-router.post("/:folderName/upload", authMiddleware.protect, upload.array("files", 10), fileController.uploadDocuments);
+router.post("/:folderName/upload", authMiddleware.protect, checkDocumentUploadLimits, upload.array("files", 10), fileController.uploadDocuments);
 
 // Generate & store folder summary
 router.get("/:folderName/summary", authMiddleware.protect, fileController.getFolderSummary);
