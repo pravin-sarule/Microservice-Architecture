@@ -128,15 +128,28 @@ export const AuthProvider = ({ children }) => {
       }
     }
     setLoading(false);
-  }, []); // Run only once on mount
+  }, []);
 
   const login = async (email, password) => {
     try {
       const response = await api.login({ email, password });
       console.log('AuthContext: Response from api.login:', response);
 
-      // Check if OTP is required
-      if (response.requiresOtp || response.requires_otp || response.data?.requiresOtp) {
+      // Check if OTP is required by checking multiple conditions
+      const requiresOtp = 
+        response.requiresOtp || 
+        response.requires_otp || 
+        response.data?.requiresOtp ||
+        // NEW: Check if message indicates OTP was sent
+        (response.message && (
+          response.message.toLowerCase().includes('otp sent') ||
+          response.message.toLowerCase().includes('otp has been sent') ||
+          response.message.toLowerCase().includes('verify to complete')
+        )) ||
+        // NEW: Check if success is false and message mentions OTP
+        (response.success === false && response.message && response.message.toLowerCase().includes('otp'));
+
+      if (requiresOtp) {
         console.log('AuthContext: Backend requires OTP for login.');
         return { 
           success: false, 
