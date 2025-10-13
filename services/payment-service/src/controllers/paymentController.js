@@ -196,9 +196,8 @@ const verifySubscription = async (req, res) => {
       `UPDATE user_subscriptions 
        SET status = 'active', 
            razorpay_payment_id = $1, 
-           activated_at = CURRENT_TIMESTAMP, 
-           updated_at = CURRENT_TIMESTAMP,
-           last_reset_date = CURRENT_DATE
+           activated_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP
        WHERE user_id = $2 AND razorpay_subscription_id = $3 
        RETURNING *`,
       [razorpay_payment_id, userId, razorpay_subscription_id]
@@ -355,24 +354,50 @@ const handleSubscriptionActivated = async (subscription) => {
     
     const result = await db.query(
       `UPDATE user_subscriptions
-       SET status = 'active', activated_at = CURRENT_TIMESTAMP, last_reset_date = CURRENT_DATE
-       WHERE razorpay_subscription_id = $1 RETURNING user_id, plan_id`,
+       SET status = 'active', activated_at = CURRENT_TIMESTAMP
+       WHERE razorpay_subscription_id = $1 RETURNING user_id, plan_id, last_reset_date`,
       [subscription.id]
     );
     
     if (result.rows.length > 0) {
-      const { user_id, plan_id } = result.rows[0];
+      const { user_id, plan_id, last_reset_date } = result.rows[0];
       console.log(`Subscription ${subscription.id} activated for user ${user_id}`);
 
       const planResult = await db.query(
-        `SELECT token_limit FROM subscription_plans WHERE id = $1`,
+        `SELECT token_limit, interval FROM subscription_plans WHERE id = $1`,
         [plan_id]
       );
       
       if (planResult.rows.length > 0) {
-        const tokenLimit = planResult.rows[0].token_limit;
-        await TokenUsageService.resetUserUsage(user_id, tokenLimit, 'Subscription Activated');
-        console.log(`User ${user_id} tokens reset to ${tokenLimit}`);
+        const { token_limit: tokenLimit, interval } = planResult.rows[0];
+
+        // Calculate next renewal date
+        const lastResetDate = new Date(last_reset_date);
+        let nextResetDate = new Date(lastResetDate);
+
+        if (interval === 'monthly') {
+          nextResetDate.setUTCMonth(nextResetDate.getUTCMonth() + 1);
+        } else if (interval === 'yearly') {
+          nextResetDate.setUTCFullYear(nextResetDate.getUTCFullYear() + 1);
+        } else if (interval === 'weekly') {
+          nextResetDate.setUTCDate(nextResetDate.getUTCDate() + 7);
+        } else if (interval === 'daily') {
+          nextResetDate.setUTCDate(nextResetDate.getUTCDate() + 1);
+        }
+
+        const now = new Date();
+        now.setUTCHours(0, 0, 0, 0);
+
+        if (interval === 'lifetime' || now >= nextResetDate) {
+          await TokenUsageService.resetUserUsage(user_id, tokenLimit, 'Subscription Activated');
+          await db.query(
+            `UPDATE user_subscriptions SET last_reset_date = CURRENT_DATE WHERE user_id = $1`,
+            [user_id]
+          );
+          console.log(`User ${user_id} tokens reset to ${tokenLimit}`);
+        } else {
+          console.log(`User ${user_id} tokens not reset. Next renewal on ${nextResetDate.toISOString().split('T')[0]}. Current date: ${now.toISOString().split('T')[0]}`);
+        }
       }
     } else {
       console.warn(`No subscription found for Razorpay ID: ${subscription.id}`);
@@ -393,25 +418,51 @@ const handleSubscriptionCharged = async (payment, subscription) => {
     const updateResult = await db.query(
       `UPDATE user_subscriptions
        SET razorpay_payment_id = $1,
-           last_charged_at = CURRENT_TIMESTAMP,
-           last_reset_date = CURRENT_DATE
-       WHERE razorpay_subscription_id = $2 RETURNING id, user_id, plan_id`,
+            last_charged_at = CURRENT_TIMESTAMP
+       WHERE razorpay_subscription_id = $2 RETURNING id, user_id, plan_id, last_reset_date`,
       [payment.id, subscription.id]
     );
 
     if (updateResult.rows.length > 0) {
-      const { id: user_subscription_id, user_id, plan_id } = updateResult.rows[0];
+      const { id: user_subscription_id, user_id, plan_id, last_reset_date } = updateResult.rows[0];
       console.log(`Subscription ${subscription.id} charged for user ${user_id}`);
 
       const planResult = await db.query(
-        `SELECT token_limit FROM subscription_plans WHERE id = $1`,
+        `SELECT token_limit, interval FROM subscription_plans WHERE id = $1`,
         [plan_id]
       );
       
       if (planResult.rows.length > 0) {
-        const tokenLimit = planResult.rows[0].token_limit;
-        await TokenUsageService.resetUserUsage(user_id, tokenLimit, 'Subscription Charged/Renewed');
-        console.log(`User ${user_id} tokens reset to ${tokenLimit}`);
+        const { token_limit: tokenLimit, interval } = planResult.rows[0];
+
+        // Calculate next renewal date
+        const lastResetDate = new Date(last_reset_date);
+        let nextResetDate = new Date(lastResetDate);
+
+        if (interval === 'monthly') {
+          nextResetDate.setUTCMonth(nextResetDate.getUTCMonth() + 1);
+        } else if (interval === 'yearly') {
+          nextResetDate.setUTCFullYear(nextResetDate.getUTCFullYear() + 1);
+        } else if (interval === 'weekly') {
+          nextResetDate.setUTCDate(nextResetDate.getUTCDate() + 7);
+        } else if (interval === 'daily') {
+          nextResetDate.setUTCDate(nextResetDate.getUTCDate() + 1);
+        }
+        // For 'lifetime' or other intervals, no automatic reset based on time
+
+        const now = new Date();
+        now.setUTCHours(0, 0, 0, 0); // Normalize current time to start of day UTC
+
+        if (interval === 'lifetime' || now >= nextResetDate) {
+          await TokenUsageService.resetUserUsage(user_id, tokenLimit, 'Subscription Charged/Renewed');
+          await db.query(
+            `UPDATE user_subscriptions SET last_reset_date = CURRENT_DATE WHERE user_id = $1`,
+            [user_id]
+          );
+          console.log(`User ${user_id} tokens reset to ${tokenLimit}`);
+        } else {
+          console.log(`User ${user_id} tokens not reset. Next renewal on ${nextResetDate.toISOString().split('T')[0]}. Current date: ${now.toISOString().split('T')[0]}`);
+        }
       }
 
       await db.query(
@@ -710,3 +761,4 @@ module.exports = {
   commitTokensApi,
   rollbackTokensApi,
 };
+

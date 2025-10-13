@@ -2,7 +2,7 @@ const pool = require('../config/db');
 const axios = require('axios'); // Import axios for HTTP requests
 const TokenUsageService = require('../services/tokenUsageService');
 
-const DOCUMENT_SERVICE_URL = process.env.DOCUMENT_SERVICE_URL || 'http://localhost:5002';
+const DOCUMENT_SERVICE_URL = process.env.API_GATEWAY_URL || 'http://localhost:5000';
 
 /**
  * @description Retrieves detailed plan and resource information for the authenticated user.
@@ -89,28 +89,45 @@ exports.getPlanAndResourceDetails = async (req, res) => {
             });
         }
 
-        // Get current token balance
-        const currentTokenBalance = await TokenUsageService.getRemainingTokens(userId);
-
-        // Fetch storage and document count from Document Service
         const apiGatewayUrl = process.env.API_GATEWAY_URL || "http://localhost:5000";
-        let totalStorageUsedBytes = 0;
-        let totalStorageUsedGB = 0;
-        let currentDocumentCount = 0;
+        const authorizationHeader = req.headers.authorization;
+
+        // Fetch user usage and plan details from Document Service
+        let userUsageFromDocumentService = null;
+        let userPlanFromDocumentService = null;
+        let timeLeftUntilReset = null;
 
         try {
-            const storageResponse = await axios.get(`${apiGatewayUrl}/files/user-storage-utilization`, {
-                headers: { Authorization: req.headers.authorization },
+            const documentServiceResponse = await axios.get(`${apiGatewayUrl}/documents/user-usage-and-plan/${userId}`, {
+                headers: { Authorization: authorizationHeader },
                 timeout: 10000 // 10 seconds
             });
-            totalStorageUsedBytes = storageResponse.data.storage.used_bytes || 0;
-            totalStorageUsedGB = storageResponse.data.storage.used_gb || 0;
-            currentDocumentCount = storageResponse.data.storage.document_count || 0;
+
+            if (documentServiceResponse.status === 200 && documentServiceResponse.data.success) {
+                userUsageFromDocumentService = documentServiceResponse.data.data.usage;
+                userPlanFromDocumentService = documentServiceResponse.data.data.plan;
+                timeLeftUntilReset = documentServiceResponse.data.data.timeLeft;
+            } else {
+                console.error('❌ Document Service returned an error:', documentServiceResponse.data);
+            }
         } catch (err) {
-            console.error('❌ Error fetching storage and document utilization from Document Service:', err.message);
+            console.error('❌ Error fetching user usage and plan from Document Service:', err.message);
+            // If Document Service is unavailable, we might fall back to local data or return a partial response.
+            // For now, we'll proceed with nulls and handle them in resourceUtilization.
         }
 
-        const planStorageLimitGB = activePlan.storage_limit_gb || 0;
+        // Use data from Document Service if available, otherwise fall back to Payment Service's activePlan
+        const effectivePlan = userPlanFromDocumentService || activePlan;
+        const currentTokenBalance = userUsageFromDocumentService ? (effectivePlan.token_limit + userUsageFromDocumentService.carry_over_tokens - userUsageFromDocumentService.tokens_used) : 0;
+        const totalTokensUsed = userUsageFromDocumentService ? userUsageFromDocumentService.tokens_used : 0;
+        const currentDocumentCount = userUsageFromDocumentService ? userUsageFromDocumentService.documents_used : 0;
+        const currentAiAnalysisUsed = userUsageFromDocumentService ? userUsageFromDocumentService.ai_analysis_used : 0;
+        const totalStorageUsedGB = userUsageFromDocumentService ? userUsageFromDocumentService.storage_used_gb : 0;
+
+        const planStorageLimitGB = effectivePlan.storage_limit_gb || 0;
+        const planTokenLimit = effectivePlan.token_limit || 0;
+        const planAiAnalysisLimit = effectivePlan.ai_analysis_limit || 0;
+        const planDocumentLimit = effectivePlan.document_limit || 0;
 
         const calculateUtilization = (used, limit) => {
             if (limit === 0) return { used, limit, percentage_used: 0, status: 'unlimited' };
@@ -120,21 +137,23 @@ exports.getPlanAndResourceDetails = async (req, res) => {
         };
 
         const resourceUtilization = {
-            tokens: calculateUtilization(activePlan.token_limit - currentTokenBalance, activePlan.token_limit),
-            queries: calculateUtilization(activePlan.ai_analysis_limit - currentTokenBalance, activePlan.ai_analysis_limit),
-            documents: calculateUtilization(currentDocumentCount, activePlan.document_limit),
+            tokens: calculateUtilization(totalTokensUsed, planTokenLimit),
+            queries: calculateUtilization(currentAiAnalysisUsed, planAiAnalysisLimit),
+            documents: calculateUtilization(currentDocumentCount, planDocumentLimit),
             storage: {
                 used_gb: totalStorageUsedGB,
                 limit_gb: planStorageLimitGB,
-                percentage_used: planStorageLimitGB > 0 ? ((totalStorageUsedBytes / (planStorageLimitGB * 1024 * 1024 * 1024)) * 100).toFixed(0) : 0,
-                status: planStorageLimitGB > 0 && totalStorageUsedBytes >= (planStorageLimitGB * 1024 * 1024 * 1024) ? 'exceeded' : 'within_limit',
+                percentage_used: planStorageLimitGB > 0 ? ((totalStorageUsedGB / planStorageLimitGB) * 100).toFixed(0) : 0,
+                status: planStorageLimitGB > 0 && totalStorageUsedGB >= planStorageLimitGB ? 'exceeded' : 'within_limit',
                 note: planStorageLimitGB === 0 ? "No storage limit defined for this plan." : undefined
-            }
+            },
+            timeLeftUntilReset: timeLeftUntilReset ? `${Math.floor(timeLeftUntilReset / 3600)}h ${Math.floor((timeLeftUntilReset % 3600) / 60)}m ${timeLeftUntilReset % 60}s` : 'N/A'
         };
+        
 
         const allPlanConfigurationsWithActiveFlag = allPlanConfigurations.map(plan => ({
             ...plan,
-            is_active_plan: plan.id === activePlan.plan_id
+            is_active_plan: activePlan && plan.id === activePlan.plan_id
         }));
 
         res.status(200).json({
@@ -232,24 +251,57 @@ exports.getUserResourceUtilization = async (req, res) => {
             return res.status(401).json({ message: 'Unauthorized' });
         }
 
-        const subscriptionQuery = `
-            SELECT
-                sp.name AS plan_name,
-                sp.token_limit,
-                sp.ai_analysis_limit,
-                sp.document_limit,
-                sp.template_access,
-                us.end_date
-            FROM
-                user_subscriptions us
-            JOIN
-                subscription_plans sp ON us.plan_id = sp.id
-            WHERE
-                us.user_id = $1 AND us.status = 'active';
-        `;
-        const subscriptionResult = await pool.query(subscriptionQuery, [userId]);
+        const apiGatewayUrl = process.env.API_GATEWAY_URL || "http://localhost:5000";
+        const authorizationHeader = req.headers.authorization;
 
-        if (subscriptionResult.rows.length === 0) {
+        let userUsageFromDocumentService = null;
+        let userPlanFromDocumentService = null;
+        let timeLeftUntilReset = null;
+
+        try {
+            const documentServiceResponse = await axios.get(`${apiGatewayUrl}/documents/user-usage-and-plan/${userId}`, {
+                headers: { Authorization: authorizationHeader },
+                timeout: 10000 // 10 seconds
+            });
+
+            if (documentServiceResponse.status === 200 && documentServiceResponse.data.success) {
+                userUsageFromDocumentService = documentServiceResponse.data.data.usage;
+                userPlanFromDocumentService = documentServiceResponse.data.data.plan;
+                timeLeftUntilReset = documentServiceResponse.data.data.timeLeft;
+            } else {
+                console.error('❌ Document Service returned an error:', documentServiceResponse.data);
+            }
+        } catch (err) {
+            console.error('❌ Error fetching user usage and plan from Document Service:', err.message);
+        }
+
+        // Use data from Document Service if available, otherwise fall back to Payment Service's activePlan
+        // Fetch the active subscription for the user if not already fetched by Document Service
+        let activePlanFromPaymentService = null;
+        if (!userPlanFromDocumentService) {
+            const subscriptionQuery = `
+                SELECT
+                    sp.*,
+                    us.start_date,
+                    us.end_date,
+                    us.status AS subscription_status
+                FROM user_subscriptions us
+                JOIN subscription_plans sp ON us.plan_id = sp.id
+                WHERE us.user_id = $1 AND us.status = 'active'
+                ORDER BY us.start_date DESC
+                LIMIT 1;
+            `;
+            const subscriptionResult = await pool.query(subscriptionQuery, [userId]);
+            activePlanFromPaymentService = subscriptionResult.rows[0] || null;
+        }
+        const effectivePlan = userPlanFromDocumentService || activePlanFromPaymentService;
+        const currentTokenBalance = userUsageFromDocumentService ? (effectivePlan.token_limit + userUsageFromDocumentService.carry_over_tokens - userUsageFromDocumentService.tokens_used) : 0;
+        const totalTokensUsed = userUsageFromDocumentService ? userUsageFromDocumentService.tokens_used : 0;
+        const currentDocumentCount = userUsageFromDocumentService ? userUsageFromDocumentService.documents_used : 0;
+        const currentAiAnalysisUsed = userUsageFromDocumentService ? userUsageFromDocumentService.ai_analysis_used : 0;
+        const totalStorageUsedGB = userUsageFromDocumentService ? userUsageFromDocumentService.storage_used_gb : 0;
+
+        if (!effectivePlan) {
             return res.status(404).json({ message: 'No active subscription found for this user.' });
         }
 
@@ -259,45 +311,18 @@ exports.getUserResourceUtilization = async (req, res) => {
             ai_analysis_limit,
             document_limit,
             template_access,
-            end_date
-        } = subscriptionResult.rows[0];
+            end_date,
+            storage_limit_gb
+        } = effectivePlan;
 
-        const tokenUsageQuery = `
-            SELECT id, user_id, tokens_used, action_description, used_at, remaining_tokens
-            FROM token_usage_logs
-            WHERE user_id = $1
-            ORDER BY used_at DESC;
-        `;
-        const tokenUsageResult = await pool.query(tokenUsageQuery, [userId]);
-        const tokenUsageLogs = tokenUsageResult.rows;
+        const planStorageLimitGB = storage_limit_gb || 0;
 
-        const currentTokenBalance = tokenUsageLogs.length > 0 ? tokenUsageLogs[0].remaining_tokens : token_limit;
-        const totalTokensUsed = tokenUsageLogs.reduce((acc, row) => acc + row.tokens_used, 0);
-
-        // Fetch storage and document utilization from the Document Service via API Gateway
-        const apiGatewayUrl = process.env.API_GATEWAY_URL || "http://localhost:5000";
-        let totalStorageUsedBytes = 0;
-        let totalStorageUsedGB = 0;
-        let currentDocumentCount = 0;
-
-        try {
-            const storageResponse = await axios.get(`${apiGatewayUrl}/files/user-storage-utilization`, {
-                headers: {
-                    Authorization: req.headers.authorization,
-                },
-            });
-            totalStorageUsedBytes = storageResponse.data.storage.used_bytes;
-            totalStorageUsedGB = storageResponse.data.storage.used_gb;
-            currentDocumentCount = storageResponse.data.storage.document_count; // Assuming document_count is also returned
-        } catch (storageError) {
-            console.error('❌ Error fetching storage and document utilization from Document Service:', storageError.message);
-            // Proceed with default values if Document Service is unavailable
-        }
-        const maxStorageGB = (15 * 1024 * 1024 * 1024 / (1024 * 1024 * 1024)).toFixed(2); // Assuming 15GB global limit
-
-        const tokenUsagePercentage = token_limit > 0 ? (((token_limit - currentTokenBalance) / token_limit) * 100).toFixed(0) : 0;
-        const documentUsagePercentage = document_limit > 0 ? ((currentDocumentCount / document_limit) * 100).toFixed(0) : 0;
-        const storageUsagePercentage = (maxStorageGB > 0 && totalStorageUsedBytes > 0) ? ((totalStorageUsedBytes / (maxStorageGB * 1024 * 1024 * 1024)) * 100).toFixed(0) : 0;
+        const calculateUtilization = (used, limit) => {
+            if (limit === 0) return { used, limit, percentage_used: 0, status: 'unlimited' };
+            const percentage = ((used / limit) * 100).toFixed(0);
+            const status = used >= limit ? 'exceeded' : 'within_limit';
+            return { used, limit, percentage_used: percentage, status };
+        };
 
         res.status(200).json({
             planDetails: {
@@ -309,35 +334,61 @@ exports.getUserResourceUtilization = async (req, res) => {
                 expiration_date: end_date
             },
             resourceUtilization: {
-                tokens: {
-                    remaining: currentTokenBalance,
-                    total_allocated: token_limit,
-                    total_used: totalTokensUsed,
-                    percentage_used: tokenUsagePercentage,
-                    expiration_date: end_date,
-                    usage_history: tokenUsageLogs
-                },
-                documents: {
-                    used: currentDocumentCount,
-                    limit: document_limit,
-                    percentage_used: documentUsagePercentage
-                },
-                queries: {
-                    used: (token_limit - currentTokenBalance),
-                    limit: ai_analysis_limit,
-                    percentage_used: tokenUsagePercentage
-                },
+                tokens: calculateUtilization(totalTokensUsed, token_limit),
+                documents: calculateUtilization(currentDocumentCount, document_limit),
+                queries: calculateUtilization(currentAiAnalysisUsed, ai_analysis_limit),
                 storage: {
                     used_gb: totalStorageUsedGB,
-                    limit_gb: maxStorageGB,
-                    percentage_used: storageUsagePercentage,
-                    note: "Storage limit is currently global (15GB). Per-plan storage limits require a 'storage_limit_gb' column in subscription_plans."
-                }
+                    limit_gb: planStorageLimitGB,
+                    percentage_used: planStorageLimitGB > 0 ? ((totalStorageUsedGB / planStorageLimitGB) * 100).toFixed(0) : 0,
+                    status: planStorageLimitGB > 0 && totalStorageUsedGB >= planStorageLimitGB ? 'exceeded' : 'within_limit',
+                    note: planStorageLimitGB === 0 ? "No storage limit defined for this plan." : undefined
+                },
+                timeLeftUntilReset: timeLeftUntilReset ? `${Math.floor(timeLeftUntilReset / 3600)}h ${Math.floor((timeLeftUntilReset % 3600) / 60)}m ${timeLeftUntilReset % 60}s` : 'N/A'
             }
         });
 
     } catch (error) {
         console.error('❌ Error fetching user resource utilization:', error);
+        res.status(500).json({ message: 'Internal server error', error: error.message });
+    }
+};
+
+/**
+ * @description Retrieves the active plan details for a specific user.
+ * This endpoint is intended to be called by other services (e.g., Document Service).
+ * @route GET /api/user-resources/user-plan/:userId
+ */
+exports.getUserPlanById = async (req, res) => {
+    try {
+        const { userId } = req.params;
+        if (!userId) {
+            return res.status(400).json({ message: 'User ID is required.' });
+        }
+
+        const subscriptionQuery = `
+            SELECT
+                sp.*,
+                us.start_date,
+                us.end_date,
+                us.status AS subscription_status
+            FROM user_subscriptions us
+            JOIN subscription_plans sp ON us.plan_id = sp.id
+            WHERE us.user_id = $1 AND us.status = 'active'
+            ORDER BY us.start_date DESC
+            LIMIT 1;
+        `;
+        const subscriptionResult = await pool.query(subscriptionQuery, [userId]);
+        const activePlan = subscriptionResult.rows[0] || null;
+
+        if (!activePlan) {
+            return res.status(404).json({ success: false, message: 'No active plan found for this user.' });
+        }
+
+        res.status(200).json({ success: true, data: activePlan });
+
+    } catch (error) {
+        console.error(`❌ Error fetching user plan for user ${req.params.userId}:`, error);
         res.status(500).json({ message: 'Internal server error', error: error.message });
     }
 };
