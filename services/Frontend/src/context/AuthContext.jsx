@@ -41,7 +41,7 @@ export const AuthProvider = ({ children }) => {
     try {
       const response = await api.login({ email, password });
       // Temporarily force OTP field to show for testing
-      if (true) { // Change this back to `response.requiresOtp` after testing
+      if (response.requiresOtp) {
         console.log('AuthContext: OTP required for login (forced for testing).');
         return { success: false, requiresOtp: true, email: email, message: 'OTP required. Please check your email.' };
       }
