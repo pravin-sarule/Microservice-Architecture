@@ -18,9 +18,12 @@ const LoginPage = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [loginSuccess, setLoginSuccess] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [showOtpField, setShowOtpField] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [otpEmail, setOtpEmail] = useState(''); // To store the email for OTP verification
 
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { login, verifyOtp } = useAuth();
   const formRef = useRef(null);
   const isInView = useInView(formRef, { once: true });
 
@@ -74,8 +77,13 @@ const LoginPage = () => {
 
     try {
       const result = await login(formData.email, formData.password);
+      console.log("Login result:", result); // Added for debugging
 
-      if (result.success) {
+      if (result.requiresOtp) {
+        setShowOtpField(true);
+        setOtpEmail(result.email);
+        toast.info(result.message || 'OTP required. Please check your email.');
+      } else if (result.success) {
         toast.success('Login successful!');
         setLoginSuccess(true);
         navigate('/dashboard');
@@ -88,6 +96,30 @@ const LoginPage = () => {
       }
       toast.error(error.message || 'An unexpected error occurred. Please try again.');
       console.error('Unexpected error:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleOtpChange = (e) => {
+    setOtp(e.target.value);
+  };
+
+  const handleOtpSubmit = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
+    try {
+      const result = await verifyOtp(otpEmail, otp);
+      if (result.success) {
+        toast.success('OTP verification successful! Logging in...');
+        setLoginSuccess(true);
+        navigate('/dashboard');
+      } else {
+        toast.error(result.message || 'OTP verification failed.');
+      }
+    } catch (error) {
+      toast.error(error.message || 'An unexpected error occurred during OTP verification. Please try again.');
+      console.error('OTP verification error:', error);
     } finally {
       setIsLoading(false);
     }
@@ -292,161 +324,230 @@ const LoginPage = () => {
             </motion.div>
 
             {/* Form */}
-            <motion.form 
-              className="space-y-6" 
-              onSubmit={handleSubmit}
-              variants={containerVariants}
-            >
-              {/* Email field */}
-              <motion.div variants={inputVariants}>
-                <label htmlFor="email-address" className="block text-sm font-medium text-gray-700 mb-2">
-                  Email Address
-                </label>
-                <div className="relative group">
-                  <motion.div 
-                    className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"
-                    whileHover={{ scale: 1.1 }}
-                  >
-                    <Mail className="h-5 w-5 text-gray-400 group-focus-within:text-gray-600 transition-colors" />
-                  </motion.div>
-                  <motion.input
-                    id="email-address"
-                    name="email"
-                    type="email"
-                    autoComplete="email"
-                    required
-                    className={`block w-full pl-10 pr-3 py-3 border ${
-                      errors.email ? 'border-red-500' : 'border-gray-300'
-                    } rounded-xl placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent transition-all duration-300 bg-white/50 backdrop-blur-sm`}
-                    placeholder="Enter your email"
-                    value={formData.email}
-                    onChange={handleChange}
-                    whileFocus={{ scale: 1.02 }}
-                    transition={{ duration: 0.2 }}
-                  />
-                  {errors.email && (
-                    <motion.p 
-                      className="mt-2 text-sm text-red-600"
-                      initial={{ opacity: 0, y: -10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.3 }}
+            {!showOtpField ? (
+              <motion.form
+                className="space-y-6"
+                onSubmit={handleSubmit}
+                variants={containerVariants}
+              >
+                {/* Email field */}
+                <motion.div variants={inputVariants}>
+                  <label htmlFor="email-address" className="block text-sm font-medium text-gray-700 mb-2">
+                    Email Address
+                  </label>
+                  <div className="relative group">
+                    <motion.div
+                      className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"
+                      whileHover={{ scale: 1.1 }}
                     >
-                      {errors.email}
-                    </motion.p>
-                  )}
-                </div>
-              </motion.div>
+                      <Mail className="h-5 w-5 text-gray-400 group-focus-within:text-gray-600 transition-colors" />
+                    </motion.div>
+                    <motion.input
+                      id="email-address"
+                      name="email"
+                      type="email"
+                      autoComplete="email"
+                      required
+                      className={`block w-full pl-10 pr-3 py-3 border ${
+                        errors.email ? 'border-red-500' : 'border-gray-300'
+                      } rounded-xl placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent transition-all duration-300 bg-white/50 backdrop-blur-sm`}
+                      placeholder="Enter your email"
+                      value={formData.email}
+                      onChange={handleChange}
+                      whileFocus={{ scale: 1.02 }}
+                      transition={{ duration: 0.2 }}
+                    />
+                    {errors.email && (
+                      <motion.p
+                        className="mt-2 text-sm text-red-600"
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.3 }}
+                      >
+                        {errors.email}
+                      </motion.p>
+                    )}
+                  </div>
+                </motion.div>
 
-              {/* Password field */}
-              <motion.div variants={inputVariants}>
-                <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
-                  Password
-                </label>
-                <div className="relative group">
-                  <motion.div 
-                    className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"
-                    whileHover={{ scale: 1.1 }}
+                {/* Password field */}
+                <motion.div variants={inputVariants}>
+                  <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-2">
+                    Password
+                  </label>
+                  <div className="relative group">
+                    <motion.div
+                      className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"
+                      whileHover={{ scale: 1.1 }}
+                    >
+                      <Lock className="h-5 w-5 text-gray-400 group-focus-within:text-gray-600 transition-colors" />
+                    </motion.div>
+                    <motion.input
+                      id="password"
+                      name="password"
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      required
+                      className={`block w-full pl-10 pr-12 py-3 border ${
+                        errors.password ? 'border-red-500' : 'border-gray-300'
+                      } rounded-xl placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent transition-all duration-300 bg-white/50 backdrop-blur-sm`}
+                      placeholder="Enter your password"
+                      value={formData.password}
+                      onChange={handleChange}
+                      whileFocus={{ scale: 1.02 }}
+                      transition={{ duration: 0.2 }}
+                    />
+                    <motion.button
+                      type="button"
+                      className="absolute inset-y-0 right-0 pr-3 flex items-center"
+                      onClick={() => setShowPassword(!showPassword)}
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.95 }}
+                    >
+                      <motion.div
+                        animate={{ rotate: showPassword ? 180 : 0 }}
+                        transition={{ duration: 0.3 }}
+                      >
+                        {showPassword ? (
+                          <EyeOff className="h-5 w-5 text-gray-400 hover:text-gray-600 transition-colors" />
+                        ) : (
+                          <Eye className="h-5 w-5 text-gray-400 hover:text-gray-600 transition-colors" />
+                        )}
+                      </motion.div>
+                    </motion.button>
+                    {errors.password && (
+                      <motion.p
+                        className="mt-2 text-sm text-red-600"
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.3 }}
+                      >
+                        {errors.password}
+                      </motion.p>
+                    )}
+                  </div>
+                </motion.div>
+
+                {/* Forgot password link */}
+                <motion.div
+                  className="flex items-center justify-end"
+                  variants={inputVariants}
+                >
+                  <Link
+                    to="#"
+                    className="text-sm font-medium text-gray-700 hover:text-gray-800 relative group"
                   >
-                    <Lock className="h-5 w-5 text-gray-400 group-focus-within:text-gray-600 transition-colors" />
-                  </motion.div>
-                  <motion.input
-                    id="password"
-                    name="password"
-                    type={showPassword ? 'text' : 'password'}
-                    autoComplete="current-password"
-                    required
-                    className={`block w-full pl-10 pr-12 py-3 border ${
-                      errors.password ? 'border-red-500' : 'border-gray-300'
-                    } rounded-xl placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent transition-all duration-300 bg-white/50 backdrop-blur-sm`}
-                    placeholder="Enter your password"
-                    value={formData.password}
-                    onChange={handleChange}
-                    whileFocus={{ scale: 1.02 }}
-                    transition={{ duration: 0.2 }}
-                  />
+                    <span className="relative z-10">Forgot your password?</span>
+                    <motion.div
+                      className="absolute bottom-0 left-0 w-0 h-0.5 bg-gradient-to-r from-gray-600 to-gray-700 group-hover:w-full transition-all duration-300"
+                    />
+                  </Link>
+                </motion.div>
+
+                {/* Submit button */}
+                <motion.div variants={inputVariants}>
                   <motion.button
-                    type="button"
-                    className="absolute inset-y-0 right-0 pr-3 flex items-center"
-                    onClick={() => setShowPassword(!showPassword)}
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.95 }}
+                    type="submit"
+                    disabled={isLoading}
+                    className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-xl text-white bg-gradient-to-r from-gray-700 to-gray-800 hover:from-gray-800 hover:to-gray-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transition-all duration-300 overflow-hidden"
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
                   >
                     <motion.div
-                      animate={{ rotate: showPassword ? 180 : 0 }}
-                      transition={{ duration: 0.3 }}
-                    >
-                      {showPassword ? (
-                        <EyeOff className="h-5 w-5 text-gray-400 hover:text-gray-600 transition-colors" />
+                      className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0"
+                      initial={{ x: '-100%' }}
+                      whileHover={{ x: '100%' }}
+                      transition={{ duration: 0.6 }}
+                    />
+                    
+                    <span className="relative z-10 flex items-center">
+                      {isLoading ? (
+                        <>
+                          <motion.div
+                            className="w-5 h-5 border-2 border-white border-t-transparent rounded-full mr-2"
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                          />
+                          Signing in...
+                        </>
                       ) : (
-                        <Eye className="h-5 w-5 text-gray-400 hover:text-gray-600 transition-colors" />
+                        <>
+                          Sign in
+                          <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform duration-300" />
+                        </>
                       )}
-                    </motion.div>
+                    </span>
                   </motion.button>
-                  {errors.password && (
-                    <motion.p 
-                      className="mt-2 text-sm text-red-600"
-                      initial={{ opacity: 0, y: -10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.3 }}
-                    >
-                      {errors.password}
-                    </motion.p>
-                  )}
-                </div>
-              </motion.div>
-
-              {/* Forgot password link */}
-              <motion.div 
-                className="flex items-center justify-end"
-                variants={inputVariants}
+                </motion.div>
+              </motion.form>
+            ) : (
+              <motion.form
+                className="space-y-6"
+                onSubmit={handleOtpSubmit}
+                variants={containerVariants}
               >
-                <Link 
-                  to="#" 
-                  className="text-sm font-medium text-gray-700 hover:text-gray-800 relative group"
-                >
-                  <span className="relative z-10">Forgot your password?</span>
-                  <motion.div 
-                    className="absolute bottom-0 left-0 w-0 h-0.5 bg-gradient-to-r from-gray-600 to-gray-700 group-hover:w-full transition-all duration-300"
-                  />
-                </Link>
-              </motion.div>
-
-              {/* Submit button */}
-              <motion.div variants={inputVariants}>
-                <motion.button
-                  type="submit"
-                  disabled={isLoading}
-                  className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-xl text-white bg-gradient-to-r from-gray-700 to-gray-800 hover:from-gray-800 hover:to-gray-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transition-all duration-300 overflow-hidden"
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                >
-                  <motion.div 
-                    className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0"
-                    initial={{ x: '-100%' }}
-                    whileHover={{ x: '100%' }}
-                    transition={{ duration: 0.6 }}
-                  />
-                  
-                  <span className="relative z-10 flex items-center">
-                    {isLoading ? (
-                      <>
-                        <motion.div
-                          className="w-5 h-5 border-2 border-white border-t-transparent rounded-full mr-2"
-                          animate={{ rotate: 360 }}
-                          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                        />
-                        Signing in...
-                      </>
-                    ) : (
-                      <>
-                        Sign in
-                        <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform duration-300" />
-                      </>
-                    )}
-                  </span>
-                </motion.button>
-              </motion.div>
-            </motion.form>
+                <motion.div variants={inputVariants}>
+                  <label htmlFor="otp" className="block text-sm font-medium text-gray-700 mb-2">
+                    Enter OTP
+                  </label>
+                  <div className="relative group">
+                    <motion.div
+                      className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"
+                      whileHover={{ scale: 1.1 }}
+                    >
+                      <Shield className="h-5 w-5 text-gray-400 group-focus-within:text-gray-600 transition-colors" />
+                    </motion.div>
+                    <motion.input
+                      id="otp"
+                      name="otp"
+                      type="text"
+                      autoComplete="one-time-code"
+                      required
+                      className={`block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-xl placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:border-transparent transition-all duration-300 bg-white/50 backdrop-blur-sm`}
+                      placeholder="Enter your OTP"
+                      value={otp}
+                      onChange={handleOtpChange}
+                      whileFocus={{ scale: 1.02 }}
+                      transition={{ duration: 0.2 }}
+                    />
+                  </div>
+                </motion.div>
+                <motion.div variants={inputVariants}>
+                  <motion.button
+                    type="submit"
+                    disabled={isLoading}
+                    className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-sm font-medium rounded-xl text-white bg-gradient-to-r from-gray-700 to-gray-800 hover:from-gray-800 hover:to-gray-900 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transition-all duration-300 overflow-hidden"
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    <motion.div
+                      className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0"
+                      initial={{ x: '-100%' }}
+                      whileHover={{ x: '100%' }}
+                      transition={{ duration: 0.6 }}
+                    />
+                    
+                    <span className="relative z-10 flex items-center">
+                      {isLoading ? (
+                        <>
+                          <motion.div
+                            className="w-5 h-5 border-2 border-white border-t-transparent rounded-full mr-2"
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                          />
+                          Verifying OTP...
+                        </>
+                      ) : (
+                        <>
+                          Verify OTP
+                          <ArrowRight className="w-5 h-5 ml-2 group-hover:translate-x-1 transition-transform duration-300" />
+                        </>
+                      )}
+                    </span>
+                  </motion.button>
+                </motion.div>
+              </motion.form>
+            )}
 
             {/* Floating elements */}
             <motion.div 

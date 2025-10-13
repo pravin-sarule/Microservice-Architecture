@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './index.css';
 import './styles/ClaudeAI.css'; // Import Claude AI-like global styles
+import './styles/AnalysisPage.css'; // Import Analysis Page specific styles
 import App from './App.jsx';
 import { AuthProvider } from './context/AuthContext.jsx';
 import { ThemeProvider } from './context/ThemeContext.jsx'; // Import ThemeProvider

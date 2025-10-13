@@ -40,17 +40,39 @@ export const AuthProvider = ({ children }) => {
   const login = async (email, password) => {
     try {
       const response = await api.login({ email, password });
+      // Temporarily force OTP field to show for testing
+      if (true) { // Change this back to `response.requiresOtp` after testing
+        console.log('AuthContext: OTP required for login (forced for testing).');
+        return { success: false, requiresOtp: true, email: email, message: 'OTP required. Please check your email.' };
+      }
       if (response.token) {
         setToken(response.token);
-        setUser(response.user); // Assuming api.login returns user data
+        setUser(response.user);
         localStorage.setItem('user', JSON.stringify(response.user));
         console.log('AuthContext: Login successful, new token set:', response.token);
         return { success: true, user: response.user, token: response.token };
       }
-      return { success: false, message: 'Login failed: No token received.' };
+      return { success: false, message: response.message || 'Login failed: No token received.' };
     } catch (error) {
       console.error('AuthContext: Login failed:', error);
       return { success: false, message: error.message || 'Login failed.' };
+    }
+  };
+
+  const verifyOtp = async (email, otp) => {
+    try {
+      const response = await api.verifyOtp(email, otp);
+      if (response.token) {
+        setToken(response.token);
+        setUser(response.user);
+        localStorage.setItem('user', JSON.stringify(response.user));
+        console.log('AuthContext: OTP verification successful, new token set:', response.token);
+        return { success: true, user: response.user, token: response.token };
+      }
+      return { success: false, message: response.message || 'OTP verification failed.' };
+    } catch (error) {
+      console.error('AuthContext: OTP verification failed:', error);
+      return { success: false, message: error.message || 'OTP verification failed.' };
     }
   };
 
@@ -63,7 +85,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, login, logout, verifyOtp }}>
       {children}
     </AuthContext.Provider>
   );

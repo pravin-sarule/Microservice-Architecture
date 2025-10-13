@@ -34,17 +34,24 @@ const documentApi = {
     const formData = new FormData();
     files.forEach((file) => formData.append('files', file));
 
-    const response = await axios.post(
-      `${API_BASE_URL}/${encodeURIComponent(folderName)}/upload`,
-      formData,
-      {
-        headers: {
-          ...getAuthHeader(),
-          'Content-Type': 'multipart/form-data',
-        },
+    try {
+      const response = await axios.post(
+        `${API_BASE_URL}/${encodeURIComponent(folderName)}/upload`,
+        formData,
+        {
+          headers: {
+            ...getAuthHeader(),
+            'Content-Type': 'multipart/form-data',
+          },
+        }
+      );
+      return { success: true, documents: response.data.documents || [] };
+    } catch (error) {
+      if (error.response && error.response.status === 403) {
+        return { success: false, message: error.response.data.message || 'Token exhausted.' };
       }
-    );
-    return response.data.documents || [];
+      return { success: false, message: error.message || 'An unexpected error occurred during upload.' };
+    }
   },
 
   // Get folder summary

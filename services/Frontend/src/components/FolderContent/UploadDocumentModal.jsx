@@ -1,8 +1,8 @@
 import React, { useState, useRef } from 'react';
 
-const UploadDocumentModal = ({ isOpen, onClose, onUpload }) => {
+const UploadDocumentModal = ({ isOpen, onClose, onUpload, uploadError }) => {
   const [selectedFiles, setSelectedFiles] = useState([]);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(''); // Local error state for file selection
   const fileInputRef = useRef(null);
 
   const handleFileChange = (e) => {
@@ -80,10 +80,15 @@ const UploadDocumentModal = ({ isOpen, onClose, onUpload }) => {
             )}
           </div>
           {error && <p className="text-red-400 text-sm mb-4">{error}</p>}
+          {uploadError && <p className="text-red-400 text-sm mb-4">{uploadError}</p>}
           <div className="flex justify-end space-x-3">
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => {
+                setSelectedFiles([]);
+                setError('');
+                onClose();
+              }}
               className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-md transition-colors duration-200"
             >
               Cancel
