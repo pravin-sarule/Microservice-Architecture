@@ -515,6 +515,7 @@ class ApiService {
     });
     if (response.token) {
       localStorage.setItem("token", response.token);
+      console.log('[ApiService] Token saved to localStorage during login:', response.token ? 'Present' : 'Not Present');
     }
     return response;
   }
@@ -563,6 +564,7 @@ class ApiService {
     });
     if (response.token) {
       localStorage.setItem("token", response.token);
+      console.log('[ApiService] Token saved to localStorage during OTP verification:', response.token ? 'Present' : 'Not Present');
     }
     return response;
   }
