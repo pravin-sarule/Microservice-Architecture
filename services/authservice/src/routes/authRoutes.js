@@ -5,13 +5,16 @@ const router = express.Router();
 // const auth = require('../middleware/auth'); // Import auth middleware
 const { protect } = require('../middleware/auth');
 
-const { register, login, updateProfile, deleteAccount, logout, fetchProfile, getUserById, updateRazorpayCustomerId } = require('../controllers/authController');
+const { register, login, verifyOtpAndLogin, updateProfile, deleteAccount, logout, fetchProfile, getUserById, updateRazorpayCustomerId } = require('../controllers/authController');
 
 // Register a new user
 router.post('/register', register);
 
 // Login with email & password
 router.post('/login', login);
+
+// Verify OTP and complete login
+router.post('/verify-otp', verifyOtpAndLogin);
 
 
 

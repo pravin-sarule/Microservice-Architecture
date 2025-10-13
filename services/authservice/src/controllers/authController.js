@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const Session = require('../models/Session');
 const { generateToken } = require('../utils/jwt');
+const { createAndSendOTP, verifyOTP } = require('../services/otpService');
 
 /**
  * @description Registers a new user in the system.
@@ -66,8 +67,8 @@ const login = async (req, res) => {
       return res.status(403).json({ message: 'You are blocked for policy violations.' });
     }
 
-    if (!user.password) {
-      console.log(`[AuthController] User ${user.email} has no password (social login).`);
+    if (!user.password || typeof user.password !== 'string' || user.password.trim() === '') {
+      console.log(`[AuthController] User ${user.email} has no password or invalid password format (social login or data issue).`);
       return res.status(400).json({ message: 'Invalid credentials or account created via social login' });
     }
     console.log(`[AuthController] Comparing password for user: ${user.email}`);
@@ -78,14 +79,43 @@ const login = async (req, res) => {
     }
     console.log(`[AuthController] Password matched for user: ${user.email}`);
 
-    const token = generateToken(user);
-
-    console.log(`[AuthController] Creating session for user: ${user.id}`);
-    await Session.create({ user_id: user.id, token });
-    console.log(`[AuthController] Session created for user: ${user.id}`);
+    // Generate and send OTP
+    await createAndSendOTP(user.email);
 
     res.status(200).json({
-      message: 'Logged in successfully',
+      message: 'OTP sent to your email. Please verify to complete login.',
+      email: user.email,
+    });
+  } catch (error) {
+    console.error('[AuthController] Error during login:', error);
+    res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+/**
+ * @description Verifies OTP and logs in the user.
+ * @route POST /api/auth/verify-otp
+ */
+const verifyOtpAndLogin = async (req, res) => {
+  const { email, otp } = req.body;
+
+  try {
+    const isOTPValid = await verifyOTP(email, otp);
+
+    if (!isOTPValid) {
+      return res.status(400).json({ message: 'Invalid or expired OTP.' });
+    }
+
+    const user = await User.findByEmail(email);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found after OTP verification.' });
+    }
+
+    const token = generateToken(user);
+    await Session.create({ user_id: user.id, token });
+
+    res.status(200).json({
+      message: 'Login successful',
       token,
       user: {
         id: user.id,
@@ -95,8 +125,9 @@ const login = async (req, res) => {
         is_blocked: user.is_blocked,
       },
     });
+
   } catch (error) {
-    console.error('[AuthController] Error during login:', error);
+    console.error('[AuthController] Error during OTP verification and login:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 };
@@ -280,4 +311,4 @@ const updateRazorpayCustomerId = async (req, res) => {
   }
 };
 
-module.exports = { register, login, updateProfile, deleteAccount, logout, fetchProfile, getUserById, updateRazorpayCustomerId };
+module.exports = { register, login, verifyOtpAndLogin, updateProfile, deleteAccount, logout, fetchProfile, getUserById, updateRazorpayCustomerId };

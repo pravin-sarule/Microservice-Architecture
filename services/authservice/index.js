@@ -1,3 +1,54 @@
+
+// const express = require("express");
+// const bodyParser = require("body-parser");
+// const cors = require("cors");
+// const jwt = require("jsonwebtoken");
+// const bcrypt = require("bcrypt");
+// const dotenv = require("dotenv");
+
+// dotenv.config();
+// const authRoutes = require("./src/routes/authRoutes"); // your auth routes
+// const pool = require("./src/config/db.js"); // your Postgres pool
+
+// const app = express();
+// const PORT = process.env.PORT || 5001;
+
+// // --------- CORS Setup ---------
+// const allowedOrigins = ["https://nexintel.netlify.app"];
+// app.use(cors({
+//   origin: allowedOrigins,
+//   credentials: true, // Allow cookies/Authorization header
+// }));
+
+// // --------- Middleware ---------
+// app.use(bodyParser.json({ limit: "10mb" }));
+// app.use(bodyParser.urlencoded({ limit: "10mb", extended: true }));
+
+// // --------- Health Check ---------
+// app.get("/health", (req, res) => {
+//   res.json({ status: "Auth Service is running" });
+// });
+
+// // --------- Auth Routes ---------
+// app.use("/api/auth", authRoutes);
+
+// // --------- Error Handler ---------
+// app.use((err, req, res, next) => {
+//   if (err instanceof SyntaxError && err.status === 400 && "body" in err) {
+//     console.error("Bad JSON:", err.message);
+//     return res.status(400).send({ message: "Invalid JSON payload" });
+//   }
+//   console.error(err.stack);
+//   res.status(500).send("Something broke!");
+// });
+
+// // --------- Start Server ---------
+// app.listen(PORT, () => {
+//   console.log(`Auth Service running on port ${PORT}`);
+// });
+
+
+
 // const express = require("express");
 // const bodyParser = require("body-parser");
 // const cors = require("cors");
@@ -59,12 +110,15 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 
 // --------- CORS Setup ---------
-const allowedOrigins = ["https://nexintel.netlify.app"];
+// Allow your frontend origin
 app.use(cors({
-  origin: allowedOrigins,
-  credentials: true, // Allow cookies/Authorization header
+  origin: 'https://nexintelagent.netlify.app', // or '*' for all origins
+  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
+  credentials: true // if you need cookies or auth headers
 }));
 
+// For preflight OPTIONS requests
+app.options('*', cors());
 // --------- Middleware ---------
 app.use(bodyParser.json({ limit: "10mb" }));
 app.use(bodyParser.urlencoded({ limit: "10mb", extended: true }));
