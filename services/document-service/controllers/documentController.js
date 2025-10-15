@@ -897,6 +897,112 @@ exports.getDocumentProcessingStatus = async (req, res) => {
 
 
 
+// exports.batchUploadDocuments = async (req, res) => {
+//   const userId = req.user.id;
+//   const authorizationHeader = req.headers.authorization;
+
+//   try {
+//     console.log(`[batchUploadDocuments] Received batch upload request.`);
+
+//     if (!userId) return res.status(401).json({ error: "Unauthorized" });
+//     if (!req.files || req.files.length === 0)
+//       return res.status(400).json({ error: "No files uploaded." });
+
+//     const { userUsage, userPlan, requestedResources } = req;
+
+//     const uploadedFiles = [];
+//     for (const file of req.files) {
+//       try {
+//         const originalFilename = file.originalname;
+//         const mimeType = file.mimetype;
+
+//         const batchUploadFolder = `batch-uploads/${userId}/${uuidv4()}`;
+//         const { gsUri: gcsInputUri, gcsPath: folderPath } = await uploadToGCS(
+//           originalFilename,
+//           file.buffer,
+//           batchUploadFolder,
+//           true,
+//           mimeType
+//         );
+
+//         const outputPrefix = `document-ai-results/${userId}/${uuidv4()}/`;
+//         const gcsOutputUriPrefix = `gs://${fileOutputBucket.name}/${outputPrefix}`;
+
+//         // Start DocAI Batch Operation
+//         const operationName = await batchProcessDocument(
+//           [gcsInputUri],
+//           gcsOutputUriPrefix,
+//           mimeType
+//         );
+
+//         // Save file metadata
+//         const fileId = await DocumentModel.saveFileMetadata(
+//           userId,
+//           originalFilename,
+//           gcsInputUri,
+//           folderPath,
+//           mimeType,
+//           file.size,
+//           "batch_queued"
+//         );
+
+//         // Create job entry
+//         const jobId = uuidv4();
+//         await ProcessingJobModel.createJob({
+//           job_id: jobId,
+//           file_id: fileId,
+//           type: "batch",
+//           gcs_input_uri: gcsInputUri,
+//           gcs_output_uri_prefix: gcsOutputUriPrefix,
+//           document_ai_operation_name: operationName,
+//           status: "queued",
+//         });
+
+//         await DocumentModel.updateFileStatus(fileId, "batch_processing", 0.0);
+
+//         uploadedFiles.push({
+//           file_id: fileId,
+//           job_id: jobId,
+//           filename: originalFilename,
+//           operation_name: operationName,
+//           gcs_input_uri: gcsInputUri,
+//           gcs_output_uri_prefix: gcsOutputUriPrefix,
+//         });
+//       } catch (innerError) {
+//         console.error(`❌ Error processing ${file.originalname}:`, innerError);
+//         uploadedFiles.push({
+//           filename: file.originalname,
+//           error: innerError.message,
+//         });
+//       }
+//     }
+
+//     // Increment usage after successful upload(s)
+//     try {
+//       await TokenUsageService.incrementUsage(
+//         userId,
+//         requestedResources,
+//         userUsage,
+//         userPlan
+//       );
+//     } catch (usageError) {
+//       console.error(`❌ Error incrementing token usage for user ${userId}:`, usageError);
+//       // Do not block the response for usage increment errors, but log them.
+//       // The batch upload itself might still be successful.
+//     }
+
+//     return res.status(202).json({
+//       message: "Batch document upload successful; processing initiated.",
+//       uploaded_files: uploadedFiles,
+//     });
+//   } catch (error) {
+//     console.error("❌ Batch Upload Error:", error);
+//     return res.status(500).json({
+//       error: "Failed to initiate batch processing",
+//       details: error.message,
+//     });
+//   }
+// };
 exports.batchUploadDocuments = async (req, res) => {
   const userId = req.user.id;
   const authorizationHeader = req.headers.authorization;
@@ -908,7 +1014,49 @@ exports.batchUploadDocuments = async (req, res) => {
     if (!req.files || req.files.length === 0)
       return res.status(400).json({ error: "No files uploaded." });
 
-    const { userUsage, userPlan, requestedResources } = req;
+    // --- Fetch user usage and plan ---
+    let usageAndPlan;
+    try {
+      usageAndPlan = await TokenUsageService.getUserUsageAndPlan(
+        userId,
+        authorizationHeader
+      );
+    } catch (planError) {
+      console.error(`❌ Failed to retrieve user plan for user ${userId}:`, planError.message);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to retrieve user plan. Please ensure the user plan service is accessible.",
+        details: planError.message,
+      });
+    }
+
+    const { usage: userUsage, plan: userPlan } = usageAndPlan;
+
+    // --- Calculate requested resources for this batch ---
+    // For simplicity, assume each document uses 1 document slot and a fixed number of tokens (adjust as needed)
+    const requestedResources = {
+      tokens: req.files.length * 100, // Example: each file consumes 100 tokens
+      documents: req.files.length,
+      ai_analysis: req.files.length,
+      storage_gb: req.files.reduce((acc, f) => acc + f.size / (1024 ** 3), 0), // convert bytes to GB
+    };
+
+    // --- Enforce limits ---
+    const limitCheck = await TokenUsageService.enforceLimits(
+      userId,
+      userUsage,
+      userPlan,
+      requestedResources
+    );
+
+    if (!limitCheck.allowed) {
+      return res.status(403).json({
+        success: false,
+        message: limitCheck.message,
+        nextRenewalTime: limitCheck.nextRenewalTime,
+        remainingTime: limitCheck.remainingTime,
+      });
+    }
 
     const uploadedFiles = [];
     for (const file of req.files) {
@@ -934,7 +1082,6 @@ exports.batchUploadDocuments = async (req, res) => {
           gcsOutputUriPrefix,
           mimeType
         );
-        console.log(`📄 Started Document AI batch operation: ${operationName}`);
 
         // Save file metadata
         const fileId = await DocumentModel.saveFileMetadata(
@@ -946,7 +1093,6 @@ exports.batchUploadDocuments = async (req, res) => {
           file.size,
           "batch_queued"
         );
-        console.log(`[batchUploadDocuments] Saved file metadata ID: ${fileId}`);
 
         // Create job entry
         const jobId = uuidv4();
@@ -979,27 +1125,31 @@ exports.batchUploadDocuments = async (req, res) => {
       }
     }
 
-    // Increment usage after successful upload(s)
-    await TokenUsageService.incrementUsage(
-      userId,
-      requestedResources,
-      userUsage,
-      userPlan
-    );
+    // --- Increment usage after successful upload(s) ---
+    try {
+      await TokenUsageService.incrementUsage(
+        userId,
+        requestedResources,
+        userPlan
+      );
+    } catch (usageError) {
+      console.error(`❌ Error incrementing token usage for user ${userId}:`, usageError);
+    }
 
     return res.status(202).json({
+      success: true,
       message: "Batch document upload successful; processing initiated.",
       uploaded_files: uploadedFiles,
     });
   } catch (error) {
     console.error("❌ Batch Upload Error:", error);
     return res.status(500).json({
-      error: "Failed to initiate batch processing",
+      success: false,
+      message: "Failed to initiate batch processing",
       details: error.message,
     });
   }
 };
-
 
 /**
  * @description Retrieves the total storage utilization for the authenticated user.

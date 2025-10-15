@@ -126,67 +126,150 @@
 // };
 
 
+// const TokenUsageService = require('../services/tokenUsageService');
+
+// // Define costs for document upload and storage
+// const DOCUMENT_UPLOAD_COST_TOKENS = 10; // 10 tokens per document upload
+// const DOCUMENT_STORAGE_COST_GB = 0.01;  // 0.01 GB per document (10 MB)
+
+// /**
+//  * Middleware to check token and resource limits before allowing document upload.
+//  */
+// const checkDocumentUploadLimits = async (req, res, next) => {
+//     try {
+//         // NOTE: Assuming req.user?.id or req.userId is correctly set by preceding auth middleware
+//         const userId = req.user?.id || req.userId; 
+//         if (!userId) {
+//             return res.status(401).json({ message: 'Unauthorized: User ID not found.' });
+//         }
+
+//         const authorizationHeader = req.headers.authorization;
+//         if (!authorizationHeader) {
+//             return res.status(401).json({ message: 'Authorization header missing.' });
+//         }
+
+//         // 1️⃣ Fetch user usage and plan
+//         let { usage, plan } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+
+//         // 2️⃣ Define resources required for this upload
+//         const requestedResources = {
+//             tokens: DOCUMENT_UPLOAD_COST_TOKENS,
+//             documents: 1,
+//             storage_gb: DOCUMENT_STORAGE_COST_GB,
+//         };
+
+//         // 3️⃣ Enforce limits, which includes the 4-hour token renewal logic
+//         const limitCheck = await TokenUsageService.enforceLimits(userId, usage, plan, requestedResources);
+
+//         if (!limitCheck.allowed) {
+//             console.log(`❌ Document upload blocked for user ${userId}: ${limitCheck.message}`);
+//             return res.status(403).json({ success: false, message: limitCheck.message, nextRenewalTime: limitCheck.nextRenewalTime });
+//         }
+
+//         // If tokens were just renewed by enforceLimits, we must refetch usage
+//         // to get the updated tokens_used (which is now 0) from the database.
+//         if (limitCheck.renewed) {
+//             console.log(`🔄 Tokens renewed for user ${userId} by middleware. Refetching usage.`);
+//             const refreshed = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+//             usage = refreshed.usage; // Update usage with renewed state
+//             plan = refreshed.plan; // Update plan
+//         }
+
+//         // Attach usage info for the controller to increment after successful upload
+//         req.userUsage = usage;
+//         req.userPlan = plan;
+//         req.requestedResources = requestedResources;
+
+//         console.log(`✅ User ${userId} has sufficient resources for document upload.`);
+//         next();
+
+//     } catch (error) {
+//         console.error('❌ Error in checkDocumentUploadLimits middleware:', error);
+//         // Check if the error is an Axios error from the external service call
+//         if (error.response && error.response.status) {
+//             if (error.response.status === 404) {
+//                 return res.status(403).json({
+//                     success: false,
+//                     message: 'Failed to retrieve user plan. Please ensure the user plan service is accessible.',
+//                     details: error.message
+//                 });
+//             }
+//             return res.status(502).json({ // Bad Gateway for upstream errors
+//                 success: false,
+//                 message: `External service error during limit check: ${error.response.statusText || 'Unknown'}`,
+//                 details: error.message,
+//                 statusCode: error.response.status
+//             });
+//         }
+//         // For other internal errors, return a generic 500
+//         res.status(500).json({ success: false, message: 'Internal server error during limit check.', details: error.message });
+//     }
+// };
+
+// module.exports = {
+//     checkDocumentUploadLimits,
+//     DOCUMENT_UPLOAD_COST_TOKENS,
+//     DOCUMENT_STORAGE_COST_GB
+// };
+
+
 const TokenUsageService = require('../services/tokenUsageService');
 
-// Define costs for document upload and storage
-const DOCUMENT_UPLOAD_COST_TOKENS = 10; // 10 tokens per document upload
-const DOCUMENT_STORAGE_COST_GB = 0.01;  // 0.01 GB per document (10 MB)
+const DOCUMENT_UPLOAD_COST_TOKENS = 10;
+const DOCUMENT_STORAGE_COST_GB = 0.01;
 
-/**
- * Middleware to check token and resource limits before allowing document upload.
- */
 const checkDocumentUploadLimits = async (req, res, next) => {
     try {
-        // NOTE: Assuming req.user?.id or req.userId is correctly set by preceding auth middleware
-        const userId = req.user?.id || req.userId; 
-        if (!userId) {
-            return res.status(401).json({ message: 'Unauthorized: User ID not found.' });
-        }
+        const userId = req.user?.id || req.userId;
+        if (!userId) return res.status(401).json({ message: 'Unauthorized: User ID not found.' });
 
         const authorizationHeader = req.headers.authorization;
-        if (!authorizationHeader) {
-            return res.status(401).json({ message: 'Authorization header missing.' });
-        }
+        if (!authorizationHeader) return res.status(401).json({ message: 'Authorization header missing.' });
 
-        // 1️⃣ Fetch user usage and plan
-        let { usage, plan } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+        // Fetch usage & plan (real plan only)
+        const { usage, plan } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+        if (!plan) return res.status(403).json({ success: false, message: 'Failed to retrieve user plan.' });
 
-        // 2️⃣ Define resources required for this upload
+        // Requested resources
         const requestedResources = {
             tokens: DOCUMENT_UPLOAD_COST_TOKENS,
             documents: 1,
             storage_gb: DOCUMENT_STORAGE_COST_GB,
         };
 
-        // 3️⃣ Enforce limits, which includes the 4-hour token renewal logic
+        // Enforce limits (only block if tokens exhausted)
         const limitCheck = await TokenUsageService.enforceLimits(userId, usage, plan, requestedResources);
-
         if (!limitCheck.allowed) {
-            console.log(`❌ Document upload blocked for user ${userId}: ${limitCheck.message}`);
-            return res.status(403).json({ success: false, message: limitCheck.message, nextRenewalTime: limitCheck.nextRenewalTime });
+            return res.status(403).json({
+                success: false,
+                message: limitCheck.message,
+                nextRenewalTime: limitCheck.nextRenewalTime
+            });
         }
 
-        // If tokens were just renewed by enforceLimits, we must refetch usage
-        // to get the updated tokens_used (which is now 0) from the database.
-        if (limitCheck.renewed) {
-            console.log(`🔄 Tokens renewed for user ${userId} by middleware. Refetching usage.`);
-            const refreshed = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
-            usage = refreshed.usage; // Update usage with renewed state
-            plan = refreshed.plan; // Update plan
-        }
-
-        // Attach usage info for the controller to increment after successful upload
+        // Attach info for controller
         req.userUsage = usage;
         req.userPlan = plan;
         req.requestedResources = requestedResources;
 
-        console.log(`✅ User ${userId} has sufficient resources for document upload.`);
         next();
 
     } catch (error) {
-        console.error('❌ Error in checkDocumentUploadLimits middleware:', error);
-        // Log the full error but return a generic 500 status to the client
-        res.status(500).json({ success: false, message: 'Internal server error during limit check.' });
+        console.error('❌ Error in checkDocumentUploadLimits:', error.message);
+
+        if (error.response?.status === 404) {
+            return res.status(403).json({
+                success: false,
+                message: 'Failed to retrieve user plan. Ensure the plan service is accessible.',
+                details: error.message
+            });
+        }
+
+        return res.status(500).json({
+            success: false,
+            message: 'Internal server error during limit check.',
+            details: error.message
+        });
     }
 };
 

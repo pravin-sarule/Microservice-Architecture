@@ -266,7 +266,7 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 app.use(cors({
-  origin: 'https://nexintelagent.netlify.app', // or '*' for all origins
+  origin: 'http://localhost:5173', // or '*' for all origins
   methods: ['GET','POST','PUT','DELETE','OPTIONS'],
   credentials: true // if you need cookies or auth headers
 }));
@@ -295,3 +295,25 @@ process.on('unhandledRejection', (err) => {
   console.error(`❌ Unhandled Rejection: ${err.message}`);
   process.exit(1);
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
