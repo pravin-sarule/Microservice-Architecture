@@ -257,6 +257,7 @@ const documentRoutes = require('./routes/documentRoutes');
 const chatRoutes = require('./routes/chatRoutes');
 const secretManagerRoutes = require('./routes/secretManagerRoutes');
 const fileRoutes = require('./routes/fileRoutes');
+const contentRoutes = require('./routes/contentRoutes');
 
 const app = express();
 
@@ -277,6 +278,7 @@ app.use('/api/doc', documentRoutes);
 app.use('/api/doc', chatRoutes);
 app.use('/api/doc', secretManagerRoutes);
 app.use('/api/files', fileRoutes);
+app.use('/api/content', contentRoutes);
 
 // Test route
 app.get('/api/test-route', (req, res) => {
