@@ -6,7 +6,7 @@ import '../styles/AnalysisPage.css';
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useParams } from 'react-router-dom';
 import { useSidebar } from '../context/SidebarContext';
-import html2pdf from 'html2pdf.js';
+import DownloadPdf from '../components/DownloadPdf/DownloadPdf';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -715,34 +715,6 @@ const AnalysisPage = () => {
     }
   };
 
-  const handleDownloadPdf = async () => {
-    const element = markdownOutputRef.current; // Use the new ref for markdown output
-    if (!element) {
-      setError('No content to download as PDF.');
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      const opt = {
-        margin: 0.5, // Add some margin for PDF
-        filename: `AI_Response_${Date.now()}.pdf`,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, allowTaint: true, logging: false },
-        jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' },
-      };
-
-      await html2pdf().set(opt).from(element).save();
-      setSuccess('AI response downloaded as PDF!');
-    } catch (err) {
-      console.error('Failed to generate PDF:', err);
-      setError(`Failed to download PDF: ${err.message}. Please try again.`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   const highlightText = (text, query) => {
     if (!query || !text) return text;
@@ -1721,14 +1693,7 @@ const AnalysisPage = () => {
                             <Copy className="h-4 w-4 mr-1" />
                             Copy
                           </button>
-                          <button
-                            onClick={handleDownloadPdf}
-                            className="flex items-center px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
-                            title="Download AI Response as PDF"
-                          >
-                            <Download className="h-4 w-4 mr-1" />
-                            PDF
-                          </button>
+                          <DownloadPdf markdownOutputRef={markdownOutputRef} />
                           {messages.find(msg => msg.id === selectedMessageId)?.timestamp && (
                             <span>{formatDate(messages.find(msg => msg.id === selectedMessageId).timestamp)}</span>
                           )}
