@@ -1,6 +1,7 @@
 
 const express = require('express');
 const router = express.Router();
+const { protect } = require('../middleware/auth');
 
 const {
   getAllSecrets,
@@ -19,6 +20,6 @@ router.get('/secrets/:id', fetchSecretValueFromGCP);
 router.post('/create', createSecretInGCP);
 
 // 🧠 POST /api/secrets/trigger-llm → trigger LLM with secret content
-router.post('/trigger-llm', triggerSecretLLM);
+router.post('/trigger-llm', protect, triggerSecretLLM);
 
 module.exports = router;
