@@ -638,3 +638,5 @@ const handleSend = async (e) => {
   }
 };
 };
+
+export default AnalysisPage;
