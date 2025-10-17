@@ -238,7 +238,8 @@ const FileChat = {
     sessionId = null,
     usedChunkIds = [],
     usedSecretPrompt = false,
-    promptLabel = null
+    promptLabel = null,
+    secretId = null // Add secretId parameter
   ) {
     // Ensure we always store a valid UUID
     const currentSessionId = isValidUUID(sessionId) ? sessionId : uuidv4();
@@ -249,9 +250,9 @@ const FileChat = {
     const res = await pool.query(
       `
       INSERT INTO file_chats
-        (file_id, user_id, question, answer, session_id, used_chunk_ids, used_secret_prompt, prompt_label, created_at)
+        (file_id, user_id, question, answer, session_id, used_chunk_ids, used_secret_prompt, prompt_label, secret_id, created_at)
       VALUES
-        ($1::uuid, $2, $3, $4, $5::uuid, $6::int[], $7, $8, NOW())
+        ($1::uuid, $2, $3, $4, $5::uuid, $6::int[], $7, $8, $9::uuid, NOW())
       RETURNING id, session_id
       `,
       [
@@ -263,6 +264,7 @@ const FileChat = {
         chunkIdsArray,
         usedSecretPrompt,
         promptLabel,
+        secretId, // Pass secretId to the query
       ]
     );
 

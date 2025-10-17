@@ -17,7 +17,8 @@ const {
   askGemini,
   analyzeWithGemini,
   getSummaryFromChunks,
-  askLLM, // Add askLLM here
+  askLLM,
+  resolveProviderName, // Add resolveProviderName here
 } = require("../services/aiService");
 const { extractText } = require("../utils/textExtractor");
 const {
@@ -648,32 +649,184 @@ exports.getSummary = async (req, res) => {
 //     return res.status(500).json({ error: "Failed to get AI answer.", details: error.message });
 //   }
 // };
+// exports.chatWithDocument = async (req, res) => {
+//   let userId = null;
+
+//   try {
+//     const {
+//       file_id,
+//       question,
+//       used_secret_prompt = false,
+//       prompt_label = null,
+//       session_id = null,
+//     } = req.body;
+
+//     userId = req.user.id;
+
+//     // Validation
+//     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+//     if (!file_id || !question) {
+//       console.error("❌ Chat Error: file_id or question missing.");
+//       return res.status(400).json({ error: "file_id and question are required." });
+//     }
+//     if (!uuidRegex.test(file_id)) {
+//       console.error(`❌ Chat Error: Invalid file ID format for file_id: ${file_id}`);
+//       return res.status(400).json({ error: "Invalid file ID format." });
+//     }
+
+//     console.log(`[chatWithDocument] User ${userId} asking: "${question.substring(0, 50)}..." for file ${file_id}`);
+
+//     // Check file access
+//     const file = await DocumentModel.getFileById(file_id);
+//     if (!file) return res.status(404).json({ error: "File not found." });
+//     if (String(file.user_id) !== String(userId)) {
+//       return res.status(403).json({ error: "Access denied." });
+//     }
+//     if (file.status !== "processed") {
+//       console.error(`❌ Chat Error: Document ${file_id} not yet processed. Current status: ${file.status}`);
+//       return res.status(400).json({
+//         error: "Document is not yet processed.",
+//         status: file.status,
+//         progress: file.processing_progress,
+//       });
+//     }
+
+//     // Build document text
+//     const allChunks = await FileChunkModel.getChunksByFileId(file_id);
+//     const documentFullText = allChunks.map((c) => c.content).join("\n\n");
+//     if (!documentFullText || documentFullText.trim() === "") {
+//       console.error(`❌ Chat Error: Document ${file_id} has no readable content.`);
+//       return res.status(400).json({ error: "Document has no readable content." });
+//     }
+
+//     // Token cost calculation (if using limits)
+//     const chatCost = Math.ceil(question.length / 100) + Math.ceil(documentFullText.length / 200);
+//     const { userUsage, userPlan, requestedResources } = req;
+
+//     // ✅ Generate session ID if not provided
+//     const finalSessionId = session_id || `session-${Date.now()}`;
+
+//     // ✅ For custom queries: Use vector search for relevant context
+//     console.log(`[chatWithDocument] Generating embedding for question...`);
+//     const questionEmbedding = await generateEmbedding(question);
+    
+//     console.log(`[chatWithDocument] Finding nearest chunks...`);
+//     const relevantChunks = await ChunkVectorModel.findNearestChunks(questionEmbedding, 5, file_id);
+//     const relevantChunkContents = relevantChunks.map((chunk) => chunk.content);
+//     const usedChunkIds = relevantChunks.map((chunk) => chunk.chunk_id);
+
+//     console.log(`[chatWithDocument] Found ${relevantChunks.length} relevant chunks`);
+
+//     let answer;
+//     const provider = 'gemini'; // ✅ Default to Gemini for custom queries
+
+//     if (relevantChunkContents.length === 0) {
+//       console.log(`[chatWithDocument] No relevant chunks found, using full document`);
+//       // No relevant context, use full document
+//       answer = await askLLM(provider, question, documentFullText);
+//     } else {
+//       // Use relevant chunks as context
+//       const context = relevantChunkContents.join("\n\n");
+//       console.log(`[chatWithDocument] Using context of ${context.length} characters`);
+//       answer = await askLLM(provider, question, context);
+//     }
+
+//     console.log(`[chatWithDocument] Received answer of ${answer.length} characters`);
+
+//     // ✅ Store chat properly based on whether it's a secret prompt or custom query
+//     const storedQuestion = used_secret_prompt
+//       ? prompt_label || "Secret Prompt Analysis"  // Store the prompt label for secret prompts
+//       : question;  // Store the actual question for custom queries
+
+//     const savedChat = await FileChat.saveChat(
+//       file_id,
+//       userId,
+//       storedQuestion,  // This will be the prompt_label or actual question
+//       answer,
+//       finalSessionId,  // Use the generated or provided session ID
+//       usedChunkIds,
+//       used_secret_prompt,  // Boolean flag
+//       used_secret_prompt ? prompt_label : null  // Store prompt_label separately
+//     );
+
+//     console.log(`[chatWithDocument] ✅ Chat saved with ID: ${savedChat.id}, session: ${finalSessionId}`);
+
+//     // Increment usage after successful AI chat
+//     await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
+
+//     // ✅ Fetch full session history with proper formatting
+//     const historyRows = await FileChat.getChatHistory(file_id, finalSessionId);
+    
+//     // ✅ Format history with display_text_left_panel for frontend
+//     const history = historyRows.map(row => ({
+//       id: row.id,
+//       file_id: row.file_id,
+//       session_id: row.session_id,
+//       question: row.question,
+//       answer: row.answer,
+//       used_secret_prompt: row.used_secret_prompt || false,
+//       prompt_label: row.prompt_label || null,
+//       used_chunk_ids: row.used_chunk_ids || [],
+//       confidence: row.confidence || 0.8,
+//       timestamp: row.created_at || row.timestamp,
+//       // ✅ Add display text for left panel
+//       display_text_left_panel: row.used_secret_prompt 
+//         ? `Analysis: ${row.prompt_label}` 
+//         : row.question
+//     }));
+
+//     console.log(`[chatWithDocument] ✅ Returning ${history.length} messages in history`);
+
+//     return res.json({
+//       success: true,
+//       session_id: finalSessionId,
+//       message_id: savedChat.id,
+//       answer,
+//       response: answer,  // Alias for compatibility
+//       history,  // ✅ Complete formatted history
+//       used_chunk_ids: usedChunkIds,
+//       confidence: 0.85,
+//       timestamp: savedChat.created_at || new Date().toISOString()
+//     });
+//   } catch (error) {
+//     console.error("❌ Error chatting with document:", error);
+//     console.error("Stack trace:", error.stack);
+//     return res.status(500).json({ 
+//       error: "Failed to get AI answer.", 
+//       details: error.message 
+//     });
+//   }
+// };
 exports.chatWithDocument = async (req, res) => {
   let userId = null;
 
   try {
     const {
       file_id,
-      question,
+      question,           // For custom queries
       used_secret_prompt = false,
       prompt_label = null,
       session_id = null,
+      secret_id,          // NEW: For secret prompts
+      llm_name,           // NEW: Optional LLM override
+      additional_input = '', // NEW: Additional input for secret prompts
     } = req.body;
 
     userId = req.user.id;
 
     // Validation
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!file_id || !question) {
-      console.error("❌ Chat Error: file_id or question missing.");
-      return res.status(400).json({ error: "file_id and question are required." });
+    if (!file_id) {
+      return res.status(400).json({ error: "file_id is required." });
     }
     if (!uuidRegex.test(file_id)) {
-      console.error(`❌ Chat Error: Invalid file ID format for file_id: ${file_id}`);
       return res.status(400).json({ error: "Invalid file ID format." });
     }
 
-    console.log(`[chatWithDocument] User ${userId} asking: "${question.substring(0, 50)}..." for file ${file_id}`);
+    // Generate session ID if not provided
+    const finalSessionId = session_id || `session-${Date.now()}`;
+
+    console.log(`[chatWithDocument] Processing request: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}`);
 
     // Check file access
     const file = await DocumentModel.getFileById(file_id);
@@ -682,7 +835,6 @@ exports.chatWithDocument = async (req, res) => {
       return res.status(403).json({ error: "Access denied." });
     }
     if (file.status !== "processed") {
-      console.error(`❌ Chat Error: Document ${file_id} not yet processed. Current status: ${file.status}`);
       return res.status(400).json({
         error: "Document is not yet processed.",
         status: file.status,
@@ -690,73 +842,141 @@ exports.chatWithDocument = async (req, res) => {
       });
     }
 
-    // Build document text
-    const allChunks = await FileChunkModel.getChunksByFileId(file_id);
-    const documentFullText = allChunks.map((c) => c.content).join("\n\n");
-    if (!documentFullText || documentFullText.trim() === "") {
-      console.error(`❌ Chat Error: Document ${file_id} has no readable content.`);
-      return res.status(400).json({ error: "Document has no readable content." });
-    }
-
-    // Token cost calculation (if using limits)
-    const chatCost = Math.ceil(question.length / 100) + Math.ceil(documentFullText.length / 200);
-    const { userUsage, userPlan, requestedResources } = req;
-
-    // ✅ Generate session ID if not provided
-    const finalSessionId = session_id || `session-${Date.now()}`;
-
-    // ✅ For custom queries: Use vector search for relevant context
-    console.log(`[chatWithDocument] Generating embedding for question...`);
-    const questionEmbedding = await generateEmbedding(question);
-    
-    console.log(`[chatWithDocument] Finding nearest chunks...`);
-    const relevantChunks = await ChunkVectorModel.findNearestChunks(questionEmbedding, 5, file_id);
-    const relevantChunkContents = relevantChunks.map((chunk) => chunk.content);
-    const usedChunkIds = relevantChunks.map((chunk) => chunk.chunk_id);
-
-    console.log(`[chatWithDocument] Found ${relevantChunks.length} relevant chunks`);
-
     let answer;
-    const provider = 'gemini'; // ✅ Default to Gemini for custom queries
+    let usedChunkIds = [];
+    let storedQuestion;
+    let finalPromptLabel = prompt_label;
+    let provider; // Declare provider here to make it accessible in the final return
 
-    if (relevantChunkContents.length === 0) {
-      console.log(`[chatWithDocument] No relevant chunks found, using full document`);
-      // No relevant context, use full document
-      answer = await askLLM(provider, question, documentFullText);
-    } else {
-      // Use relevant chunks as context
-      const context = relevantChunkContents.join("\n\n");
-      console.log(`[chatWithDocument] Using context of ${context.length} characters`);
-      answer = await askLLM(provider, question, context);
+    // ================================
+    // CASE 1: SECRET PROMPT HANDLING
+    // ================================
+    if (used_secret_prompt) {
+      if (!secret_id) {
+        return res.status(400).json({ error: "secret_id is required for secret prompts." });
+      }
+
+      console.log(`[chatWithDocument] Handling secret prompt: ${secret_id}`);
+
+      // Fetch secret configuration from DB
+      const secretQuery = `
+        SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
+        FROM secret_manager s
+        LEFT JOIN llm_models l ON s.llm_id = l.id
+        WHERE s.id = $1
+      `;
+      const secretResult = await db.query(secretQuery, [secret_id]);
+
+      if (secretResult.rows.length === 0) {
+        return res.status(404).json({ error: "Secret configuration not found." });
+      }
+
+      const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } = secretResult.rows[0];
+      finalPromptLabel = secretName;
+
+      // Resolve LLM provider (prioritize request llm_name, then DB, then default)
+      provider = resolveProviderName(llm_name || dbLlmName || 'gemini'); // Assign to the higher-scoped provider
+      console.log(`[chatWithDocument] Using LLM provider: ${provider}`);
+
+      // Fetch secret value from GCP Secret Manager
+      const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
+      const secretClient = new SecretManagerServiceClient();
+      const GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
+      
+      const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
+      const [accessResponse] = await secretClient.accessSecretVersion({ name: gcpSecretName });
+      const secretValue = accessResponse.payload.data.toString('utf8');
+
+      if (!secretValue?.trim()) {
+        return res.status(500).json({ error: "Secret value is empty." });
+      }
+
+      // Fetch all document chunks for secret prompts (use full context)
+      const allChunks = await FileChunkModel.getChunksByFileId(file_id);
+      if (!allChunks?.length) {
+        return res.status(404).json({ error: "No document content found." });
+      }
+      
+      usedChunkIds = allChunks.map(c => c.id);
+      const documentContent = allChunks.map(c => c.content).join('\n\n');
+
+      // Construct final prompt
+      let finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n`;
+      finalPrompt += `${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${documentContent}`;
+
+      if (additional_input?.trim()) {
+        finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additional_input.trim()}`;
+      }
+
+      console.log(`[chatWithDocument] Secret prompt length: ${finalPrompt.length}`);
+      
+      // Call LLM with selected provider
+      answer = await askLLM(provider, finalPrompt);
+      
+      storedQuestion = secretName; // Store secret name as question
+
+    } 
+    // ================================
+    // CASE 2: CUSTOM QUERY HANDLING
+    // ================================
+    else {
+      if (!question?.trim()) {
+        return res.status(400).json({ error: "question is required for custom queries." });
+      }
+
+      console.log(`[chatWithDocument] Handling custom query: "${question.substring(0, 50)}..."`);
+
+      // For custom queries, always use 'gemini' as the provider.
+      provider = 'gemini'; // Assign to the higher-scoped provider
+      console.log(`[chatWithDocument] Custom query using fixed provider: ${provider}`);
+
+      // Use vector search for relevant context (existing logic)
+      const questionEmbedding = await generateEmbedding(question);
+      const relevantChunks = await ChunkVectorModel.findNearestChunks(questionEmbedding, 5, file_id);
+      const relevantChunkContents = relevantChunks.map(chunk => chunk.content);
+      usedChunkIds = relevantChunks.map(chunk => chunk.chunk_id);
+
+      if (relevantChunkContents.length === 0) {
+        console.log(`[chatWithDocument] No relevant chunks, using full document`);
+        const allChunks = await FileChunkModel.getChunksByFileId(file_id);
+        const documentFullText = allChunks.map(c => c.content).join("\n\n");
+        answer = await askLLM(provider, question, documentFullText);
+      } else {
+        const context = relevantChunkContents.join("\n\n");
+        console.log(`[chatWithDocument] Using ${relevantChunkContents.length} relevant chunks`);
+        answer = await askLLM(provider, question, context);
+      }
+
+      storedQuestion = question; // Store actual question
     }
 
-    console.log(`[chatWithDocument] Received answer of ${answer.length} characters`);
+    if (!answer?.trim()) {
+      return res.status(500).json({ error: "Empty response from AI." });
+    }
 
-    // ✅ Store chat properly based on whether it's a secret prompt or custom query
-    const storedQuestion = used_secret_prompt
-      ? prompt_label || "Secret Prompt Analysis"  // Store the prompt label for secret prompts
-      : question;  // Store the actual question for custom queries
+    console.log(`[chatWithDocument] Answer length: ${answer.length} characters`);
 
+    // Store chat in database
     const savedChat = await FileChat.saveChat(
       file_id,
       userId,
-      storedQuestion,  // This will be the prompt_label or actual question
+      storedQuestion,
       answer,
-      finalSessionId,  // Use the generated or provided session ID
+      finalSessionId,
       usedChunkIds,
-      used_secret_prompt,  // Boolean flag
-      used_secret_prompt ? prompt_label : null  // Store prompt_label separately
+      used_secret_prompt,
+      finalPromptLabel,      // prompt_label
+      used_secret_prompt ? secret_id : null  // secret_id (now passed to saveChat)
     );
 
-    console.log(`[chatWithDocument] ✅ Chat saved with ID: ${savedChat.id}, session: ${finalSessionId}`);
+    console.log(`[chatWithDocument] ✅ Chat saved with ID: ${savedChat.id}`);
 
-    // Increment usage after successful AI chat
+    // Increment usage
+    const { userUsage, userPlan, requestedResources } = req;
     await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
 
-    // ✅ Fetch full session history with proper formatting
+    // Fetch full session history
     const historyRows = await FileChat.getChatHistory(file_id, finalSessionId);
-    
-    // ✅ Format history with display_text_left_panel for frontend
     const history = historyRows.map(row => ({
       id: row.id,
       file_id: row.file_id,
@@ -765,30 +985,31 @@ exports.chatWithDocument = async (req, res) => {
       answer: row.answer,
       used_secret_prompt: row.used_secret_prompt || false,
       prompt_label: row.prompt_label || null,
+      secret_id: row.secret_id || null,
       used_chunk_ids: row.used_chunk_ids || [],
       confidence: row.confidence || 0.8,
       timestamp: row.created_at || row.timestamp,
-      // ✅ Add display text for left panel
       display_text_left_panel: row.used_secret_prompt 
-        ? `Analysis: ${row.prompt_label}` 
+        ? `Analysis: ${row.prompt_label || 'Secret Prompt'}`
         : row.question
     }));
-
-    console.log(`[chatWithDocument] ✅ Returning ${history.length} messages in history`);
 
     return res.json({
       success: true,
       session_id: finalSessionId,
       message_id: savedChat.id,
       answer,
-      response: answer,  // Alias for compatibility
-      history,  // ✅ Complete formatted history
+      response: answer,
+      history,
       used_chunk_ids: usedChunkIds,
-      confidence: 0.85,
-      timestamp: savedChat.created_at || new Date().toISOString()
+      confidence: used_secret_prompt ? 0.9 : 0.85, // Higher confidence for secret prompts
+      timestamp: savedChat.created_at || new Date().toISOString(),
+      llm_provider: provider, // Include which LLM was used
+      used_secret_prompt: used_secret_prompt
     });
+
   } catch (error) {
-    console.error("❌ Error chatting with document:", error);
+    console.error("❌ Error in chatWithDocument:", error);
     console.error("Stack trace:", error.stack);
     return res.status(500).json({ 
       error: "Failed to get AI answer.", 

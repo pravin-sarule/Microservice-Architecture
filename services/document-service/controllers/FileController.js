@@ -6,6 +6,9 @@ const mime = require("mime-types");
 const path = require("path");
 const { v4: uuidv4 } = require("uuid");
 
+// Database
+const pool = require("../config/db");
+
 // Models
 const File = require("../models/File");
 const FileChat = require("../models/FileChat");
@@ -122,35 +125,7 @@ async function processDocumentWithAI(fileId, fileBuffer, mimetype, userId, origi
   }
 }
 
-/* ----------------- Create Folder ----------------- */
-// exports.createFolder = async (req, res) => {
-//   try {
-//     const { folderName } = req.body;
-//     const userId = req.user.id;
 
-//     if (!folderName) return res.status(400).json({ error: "Folder name is required" });
-
-//     const safeFolderName = sanitizeName(folderName);
-//     const gcsPath = `${userId}/documents/${safeFolderName}/`;
-
-//     await uploadToGCS(".keep", Buffer.from(""), gcsPath, false, "text/plain");
-
-//     const folder = await File.create({
-//       user_id: userId,
-//       originalname: safeFolderName,
-//       gcs_path: gcsPath,
-//       mimetype: 'folder/x-directory',
-//       is_folder: true,
-//       status: "processed",
-//       processing_progress: 100,
-//     });
-
-//     return res.status(201).json({ message: "Folder created", folder });
-//   } catch (error) {
-//     console.error("❌ createFolder error:", error);
-//     res.status(500).json({ error: "Internal server error", details: error.message });
-//   }
-// };
 exports.createFolder = async (req, res) => {
   try {
     const { folderName, parentPath = '' } = req.body; // allow parent folder
@@ -195,28 +170,576 @@ exports.createFolder = async (req, res) => {
   }
 };
 
-/* ----------------- Get All Folders for a User ----------------- */
-// exports.getFolders = async (req, res) => {
+
+
+// exports.createCase = async (req, res) => {
+//   const client = await pool.connect();
+
 //   try {
-//     const userId = req.user.id;
+//     const userId = req.user?.id;
+//     if (!userId) {
+//       return res.status(401).json({ error: "Unauthorized user" });
+//     }
 
-//     const allFilesAndFolders = await File.findByUserId(userId);
-//     const folders = allFilesAndFolders.filter(item => item.is_folder);
+//     const {
+//       case_title,
+//       case_number,
+//       filing_date,
+//       case_type,
+//       sub_type,
+//       court_name,
+//       court_level,
+//       bench_division,
+//       jurisdiction,
+//       state,
+//       judges,
+//       court_room_no,
+//       petitioners,
+//       respondents,
+//       category_type,
+//       primary_category,
+//       sub_category,
+//       complexity,
+//       monetary_value,
+//       priority_level,
+//       status = 'Active'
+//     } = req.body;
 
-//     return res.json({
-//       success: true,
-//       folders: folders.map(folder => ({
-//         id: folder.id,
-//         name: folder.originalname,
-//         gcsPath: folder.gcs_path,
-//         createdAt: folder.created_at,
-//       })),
+//     if (!case_title || !case_type || !court_name) {
+//       return res.status(400).json({
+//         error: "Missing required fields: case_title, case_type, court_name",
+//       });
+//     }
+
+//     await client.query('BEGIN');
+
+//     // 🧩 Step 1: Insert Case
+//     const insertCaseQuery = `
+//       INSERT INTO cases (
+//         user_id, case_title, case_number, filing_date, case_type, sub_type,
+//         court_name, court_level, bench_division, jurisdiction, state, judges,
+//         court_room_no, petitioners, respondents, category_type, primary_category,
+//         sub_category, complexity, monetary_value, priority_level, status
+//       )
+//       VALUES (
+//         $1, $2, $3, $4, $5, $6,
+//         $7, $8, $9, $10, $11, $12,
+//         $13, $14, $15, $16, $17,
+//         $18, $19, $20, $21, $22
+//       )
+//       RETURNING *;
+//     `;
+
+//     const caseValues = [
+//       userId,
+//       case_title,
+//       case_number,
+//       filing_date,
+//       case_type,
+//       sub_type,
+//       court_name,
+//       court_level,
+//       bench_division,
+//       jurisdiction,
+//       state,
+//       judges ? JSON.stringify(judges) : null,
+//       court_room_no,
+//       petitioners ? JSON.stringify(petitioners) : null,
+//       respondents ? JSON.stringify(respondents) : null,
+//       category_type,
+//       primary_category,
+//       sub_category,
+//       complexity,
+//       monetary_value,
+//       priority_level,
+//       status,
+//     ];
+
+//     const { rows: caseRows } = await client.query(insertCaseQuery, caseValues);
+//     const newCase = caseRows[0];
+
+//     // 🧩 Step 2: Create Folder for Case
+//     const safeCaseName = sanitizeName(case_title);
+//     const folderName = safeCaseName;
+//     const parentPath = `${userId}/cases`;
+
+//     // Prepare fake req/res for internal call
+//     const fakeReq = {
+//       user: { id: userId },
+//       body: { folderName, parentPath },
+//     };
+
+//     // Temporary object to capture folder response
+//     let folderData = {};
+//     const fakeRes = {
+//       status: (code) => fakeRes,
+//       json: (data) => {
+//         folderData = data;
+//         return data;
+//       },
+//     };
+
+//     // Call your existing folder creation logic
+//     await createFolder(fakeReq, fakeRes);
+
+//     if (!folderData.folder) {
+//       throw new Error("Folder creation failed");
+//     }
+
+//     const folderId = folderData.folder.id;
+
+//     // 🧩 Step 3: Update case with folder_id
+//     const updateQuery = `UPDATE cases SET folder_id = $1 WHERE id = $2 RETURNING *;`;
+//     const { rows: updatedRows } = await client.query(updateQuery, [folderId, newCase.id]);
+//     const updatedCase = updatedRows[0];
+
+//     await client.query('COMMIT');
+
+//     return res.status(201).json({
+//       message: "Case created successfully with folder",
+//       case: updatedCase,
+//       folder: folderData.folder,
 //     });
 //   } catch (error) {
-//     console.error("❌ getFolders error:", error);
-//     res.status(500).json({ error: "Failed to fetch folders", details: error.message });
+//     await client.query('ROLLBACK');
+//     console.error("❌ Error creating case:", error);
+//     return res.status(500).json({
+//       error: "Internal server error",
+//       details: error.message,
+//     });
+//   } finally {
+//     client.release();
 //   }
 // };
+
+
+
+// exports.createCase = async (req, res) => {
+//   const client = await pool.connect();
+
+//   try {
+//     const userId = req.user?.id;
+//     if (!userId) {
+//       return res.status(401).json({ error: "Unauthorized user" });
+//     }
+
+//     const {
+//       case_title,
+//       case_number,
+//       filing_date,
+//       case_type,
+//       sub_type,
+//       court_name,
+//       court_level,
+//       bench_division,
+//       jurisdiction,
+//       state,
+//       judges,
+//       court_room_no,
+//       petitioners,
+//       respondents,
+//       category_type,
+//       primary_category,
+//       sub_category,
+//       complexity,
+//       monetary_value,
+//       priority_level,
+//       status = "Active"
+//     } = req.body;
+
+//     if (!case_title || !case_type || !court_name) {
+//       return res.status(400).json({
+//         error: "Missing required fields: case_title, case_type, court_name",
+//       });
+//     }
+
+//     await client.query("BEGIN");
+
+//     // 🧩 Step 1: Create case record
+//     const insertQuery = `
+//       INSERT INTO cases (
+//         user_id, case_title, case_number, filing_date, case_type, sub_type,
+//         court_name, court_level, bench_division, jurisdiction, state, judges,
+//         court_room_no, petitioners, respondents, category_type, primary_category,
+//         sub_category, complexity, monetary_value, priority_level, status
+//       )
+//       VALUES (
+//         $1, $2, $3, $4, $5, $6,
+//         $7, $8, $9, $10, $11, $12,
+//         $13, $14, $15, $16, $17,
+//         $18, $19, $20, $21, $22
+//       )
+//       RETURNING *;
+//     `;
+
+//     const values = [
+//       userId,
+//       case_title,
+//       case_number,
+//       filing_date,
+//       case_type,
+//       sub_type,
+//       court_name,
+//       court_level,
+//       bench_division,
+//       jurisdiction,
+//       state,
+//       judges ? JSON.stringify(judges) : null,
+//       court_room_no,
+//       petitioners ? JSON.stringify(petitioners) : null,
+//       respondents ? JSON.stringify(respondents) : null,
+//       category_type,
+//       primary_category,
+//       sub_category,
+//       complexity,
+//       monetary_value,
+//       priority_level,
+//       status
+//     ];
+
+//     const { rows: caseRows } = await client.query(insertQuery, values);
+//     const newCase = caseRows[0];
+
+//     // 🗂 Step 2: Create a folder for the case
+//     const safeCaseName = sanitizeName(case_title);
+//     const folderPath = `${userId}/documents/cases/${safeCaseName}/`;
+
+//     // Create a placeholder .keep file to ensure the folder exists in GCS
+//     await uploadToGCS(".keep", Buffer.from(""), folderPath, false, "text/plain");
+
+//     // Save folder record in user_files table
+//     const folderRecord = await File.create({
+//       user_id: userId,
+//       originalname: safeCaseName,
+//       gcs_path: folderPath,
+//       folder_path: `${userId}/documents/cases`,
+//       mimetype: "folder/x-directory",
+//       is_folder: true,
+//       status: "processed",
+//       processing_progress: 100,
+//       size: 0
+//     });
+
+//     // 🔗 Step 3: Update the case with folder_id
+//     const updateQuery = `
+//       UPDATE cases
+//       SET folder_id = $1
+//       WHERE id = $2
+//       RETURNING *;
+//     `;
+//     const { rows: updatedRows } = await client.query(updateQuery, [folderRecord.id, newCase.id]);
+//     const updatedCase = updatedRows[0];
+
+//     await client.query("COMMIT");
+
+//     return res.status(201).json({
+//       message: "Case created successfully with folder",
+//       case: updatedCase,
+//       folder: folderRecord
+//     });
+
+//   } catch (error) {
+//     await client.query("ROLLBACK");
+//     console.error("❌ Error creating case:", error);
+//     res.status(500).json({
+//       error: "Internal server error",
+//       details: error.message
+//     });
+//   } finally {
+//     client.release();
+//   }
+// };
+
+
+
+
+/* ---------------------- Create Folder ---------------------- */
+async function createFolderInternal(userId, folderName, parentPath = "") {
+  try {
+    if (!folderName) {
+      throw new Error("Folder name is required");
+    }
+
+    // Sanitize folder and parent names
+    const cleanParentPath = parentPath ? parentPath.replace(/^\/+|\/+$/g, "") : "";
+    const safeFolderName = sanitizeName(folderName.replace(/^\/+|\/+$/g, ""));
+
+    // Construct full folder path
+    const folderPath = cleanParentPath
+      ? `${cleanParentPath}/${safeFolderName}`
+      : safeFolderName;
+
+    // GCS path for folder
+    const gcsPath = `${userId}/documents/${folderPath}/`;
+
+    // Create placeholder file in GCS (to make the folder visible)
+    await uploadToGCS(".keep", Buffer.from(""), gcsPath, false, "text/plain");
+
+    // Save record in DB
+    const folder = await File.create({
+      user_id: userId,
+      originalname: safeFolderName,
+      gcs_path: gcsPath,
+      folder_path: cleanParentPath || null,
+      mimetype: "folder/x-directory",
+      is_folder: true,
+      status: "processed",
+      processing_progress: 100,
+      size: 0,
+    });
+
+    return folder;
+  } catch (error) {
+    console.error("❌ createFolderInternal error:", error);
+    throw new Error("Failed to create folder: " + error.message);
+  }
+}
+
+/* ---------------------- Create Case ---------------------- */
+// exports.createCase = async (req, res) => {
+//   const client = await pool.connect();
+
+//   try {
+//     const userId = req.user?.id;
+//     if (!userId) {
+//       return res.status(401).json({ error: "Unauthorized user" });
+//     }
+
+//     const {
+//       case_title,
+//       case_number,
+//       filing_date,
+//       case_type,
+//       sub_type,
+//       court_name,
+//       court_level,
+//       bench_division,
+//       jurisdiction,
+//       state,
+//       judges,
+//       court_room_no,
+//       petitioners,
+//       respondents,
+//       category_type,
+//       primary_category,
+//       sub_category,
+//       complexity,
+//       monetary_value,
+//       priority_level,
+//       status = "Active",
+//     } = req.body;
+
+//     if (!case_title || !case_type || !court_name) {
+//       return res.status(400).json({
+//         error: "Missing required fields: case_title, case_type, court_name",
+//       });
+//     }
+
+//     await client.query("BEGIN");
+
+//     // 🧩 Step 1: Insert the case
+//     const insertQuery = `
+//       INSERT INTO cases (
+//         user_id, case_title, case_number, filing_date, case_type, sub_type,
+//         court_name, court_level, bench_division, jurisdiction, state, judges,
+//         court_room_no, petitioners, respondents, category_type, primary_category,
+//         sub_category, complexity, monetary_value, priority_level, status
+//       )
+//       VALUES (
+//         $1, $2, $3, $4, $5, $6,
+//         $7, $8, $9, $10, $11, $12,
+//         $13, $14, $15, $16, $17,
+//         $18, $19, $20, $21, $22
+//       )
+//       RETURNING *;
+//     `;
+
+//     const values = [
+//       userId,
+//       case_title,
+//       case_number,
+//       filing_date,
+//       case_type,
+//       sub_type,
+//       court_name,
+//       court_level,
+//       bench_division,
+//       jurisdiction,
+//       state,
+//       judges ? JSON.stringify(judges) : null,
+//       court_room_no,
+//       petitioners ? JSON.stringify(petitioners) : null,
+//       respondents ? JSON.stringify(respondents) : null,
+//       category_type,
+//       primary_category,
+//       sub_category,
+//       complexity,
+//       monetary_value,
+//       priority_level,
+//       status,
+//     ];
+
+//     const { rows: caseRows } = await client.query(insertQuery, values);
+//     const newCase = caseRows[0];
+
+//     // 🗂 Step 2: Create folder for the case
+//     const safeCaseName = sanitizeName(case_title);
+//     const parentPath = `${userId}/cases`; // optional logical parent
+//     const folder = await createFolderInternal(userId, safeCaseName, parentPath);
+
+//     // 🔗 Step 3: Link folder to case
+//     const updateQuery = `
+//       UPDATE cases
+//       SET folder_id = $1
+//       WHERE id = $2
+//       RETURNING *;
+//     `;
+//     const { rows: updatedRows } = await client.query(updateQuery, [
+//       folder.id,
+//       newCase.id,
+//     ]);
+//     const updatedCase = updatedRows[0];
+
+//     await client.query("COMMIT");
+
+//     return res.status(201).json({
+//       message: "Case created successfully with folder",
+//       case: updatedCase,
+//       folder,
+//     });
+//   } catch (error) {
+//     await client.query("ROLLBACK");
+//     console.error("❌ Error creating case:", error);
+//     res.status(500).json({
+//       error: "Internal server error",
+//       details: error.message,
+//     });
+//   } finally {
+//     client.release();
+//   }
+// };
+exports.createCase = async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const userId = parseInt(req.user?.id); // Ensure integer
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized user" });
+    }
+
+    const {
+      case_title,
+      case_number,
+      filing_date,
+      case_type,
+      sub_type,
+      court_name,
+      court_level,
+      bench_division,
+      jurisdiction,
+      state,
+      judges,
+      court_room_no,
+      petitioners,
+      respondents,
+      category_type,
+      primary_category,
+      sub_category,
+      complexity,
+      monetary_value,
+      priority_level,
+      status = "Active",
+    } = req.body;
+
+    if (!case_title || !case_type || !court_name) {
+      return res.status(400).json({
+        error: "Missing required fields: case_title, case_type, court_name",
+      });
+    }
+
+    await client.query("BEGIN");
+
+    const insertQuery = `
+      INSERT INTO cases (
+        user_id, case_title, case_number, filing_date, case_type, sub_type,
+        court_name, court_level, bench_division, jurisdiction, state, judges,
+        court_room_no, petitioners, respondents, category_type, primary_category,
+        sub_category, complexity, monetary_value, priority_level, status
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10, $11, $12,
+        $13, $14, $15, $16, $17,
+        $18, $19, $20, $21, $22
+      )
+      RETURNING *;
+    `;
+
+    const values = [
+      userId,
+      case_title,
+      case_number,
+      filing_date,
+      case_type,
+      sub_type,
+      court_name,
+      court_level,
+      bench_division,
+      jurisdiction,
+      state,
+      judges ? JSON.stringify(judges) : null,
+      court_room_no,
+      petitioners ? JSON.stringify(petitioners) : null,
+      respondents ? JSON.stringify(respondents) : null,
+      category_type,
+      primary_category,
+      sub_category,
+      complexity,
+      monetary_value,
+      priority_level,
+      status,
+    ];
+
+    const { rows: caseRows } = await client.query(insertQuery, values);
+    const newCase = caseRows[0];
+
+    // Create folder for the case
+    const safeCaseName = sanitizeName(case_title);
+    const parentPath = `${userId}/cases`;
+    const folder = await createFolderInternal(userId, safeCaseName, parentPath);
+
+    // Link folder to case
+    const updateQuery = `
+      UPDATE cases
+      SET folder_id = $1
+      WHERE id = $2
+      RETURNING *;
+    `;
+    const { rows: updatedRows } = await client.query(updateQuery, [
+      folder.id,
+      newCase.id,
+    ]);
+    const updatedCase = updatedRows[0];
+
+    await client.query("COMMIT");
+
+    return res.status(201).json({
+      message: "Case created successfully with folder",
+      case: updatedCase,
+      folder,
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error creating case:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      details: error.message,
+    });
+  } finally {
+    client.release();
+  }
+};
+
 exports .getFolders = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -456,436 +979,6 @@ exports.getFolderSummary = async (req, res) => {
     res.status(500).json({ error: "Failed to generate folder summary", details: error.message });
   }
 };
-
-/* ----------------- Query Folder Documents (FIXED) ----------------- */
-// exports.queryFolderDocuments = async (req, res) => {
-//   try {
-//     const { folderName } = req.params;
-//     const { question, sessionId, maxResults = 10 } = req.body;
-//     const userId = req.user.id;
-
-//     if (!question) {
-//       return res.status(400).json({ error: "Question is required" });
-//     }
-
-//     console.log(`[queryFolderDocuments] Processing query for folder: ${folderName}, user: ${userId}`);
-//     console.log(`[queryFolderDocuments] Question: ${question}`);
-
-//     // Get all processed files in the folder
-//     const files = await File.findByUserIdAndFolderPath(userId, folderName);
-//     const processedFiles = files.filter(f => !f.is_folder && f.status === "processed");
-    
-//     console.log(`[queryFolderDocuments] Found ${processedFiles.length} processed files in folder ${folderName}`);
-    
-//     if (processedFiles.length === 0) {
-//       return res.status(404).json({ 
-//         error: "No processed documents in folder",
-//         debug: { totalFiles: files.length, processedFiles: 0 }
-//       });
-//     }
-
-//     // Get all chunks from all files in the folder
-//     let allChunks = [];
-//     for (const file of processedFiles) {
-//       const chunks = await FileChunk.getChunksByFileId(file.id);
-//       console.log(`[queryFolderDocuments] File ${file.originalname} has ${chunks.length} chunks`);
-      
-//       const chunksWithFileInfo = chunks.map(chunk => ({
-//         ...chunk,
-//         filename: file.originalname,
-//         file_id: file.id
-//       }));
-//       allChunks = allChunks.concat(chunksWithFileInfo);
-//     }
-
-//     console.log(`[queryFolderDocuments] Total chunks found: ${allChunks.length}`);
-
-//     if (allChunks.length === 0) {
-//       return res.json({
-//         answer: "The documents in this folder don't appear to have any processed content yet. Please wait for processing to complete or check the document processing status.",
-//         sources: [],
-//         sessionId: sessionId || uuidv4(),
-//         debug: { processedFiles: processedFiles.length, totalChunks: 0 }
-//       });
-//     }
-
-//     // Use keyword-based search for better reliability
-//     const questionLower = question.toLowerCase();
-//     const questionWords = questionLower
-//       .split(/\s+/)
-//       .filter(word => word.length > 3 && !['what', 'where', 'when', 'how', 'why', 'which', 'this', 'that', 'these', 'those'].includes(word));
-    
-//     console.log(`[queryFolderDocuments] Question keywords:`, questionWords);
-
-//     let relevantChunks = [];
-    
-//     if (questionWords.length > 0) {
-//       // Score chunks based on keyword matches and context
-//       relevantChunks = allChunks.map(chunk => {
-//         const contentLower = chunk.content.toLowerCase();
-//         let score = 0;
-        
-//         // Check for exact keyword matches
-//         for (const word of questionWords) {
-//           const escapedWord = escapeRegExp(word);
-//           const regex = new RegExp(`\\b${escapedWord}\\b`, 'gi');
-//           const matches = (contentLower.match(regex) || []).length;
-//           score += matches * 2; // Weight exact matches higher
-//         }
-        
-//         // Check for partial matches
-//         for (const word of questionWords) {
-//           if (contentLower.includes(word)) {
-//             score += 1;
-//           }
-//         }
-        
-//         return {
-//           ...chunk,
-//           similarity_score: score
-//         };
-//       })
-//       .filter(chunk => chunk.similarity_score > 0)
-//       .sort((a, b) => b.similarity_score - a.similarity_score)
-//       .slice(0, maxResults);
-//     } else {
-//       // If no meaningful keywords, use first chunks from each document for context
-//       const chunksPerDoc = Math.max(1, Math.floor(maxResults / processedFiles.length));
-//       for (const file of processedFiles) {
-//         const fileChunks = allChunks.filter(chunk => chunk.file_id === file.id);
-//         const topChunks = fileChunks.slice(0, chunksPerDoc).map(chunk => ({
-//           ...chunk,
-//           similarity_score: 0.5
-//         }));
-//         relevantChunks = relevantChunks.concat(topChunks);
-//       }
-//     }
-
-//     console.log(`[queryFolderDocuments] Found ${relevantChunks.length} relevant chunks`);
-
-//     // Prepare comprehensive context for AI
-//     const contextText = relevantChunks.map((chunk, index) => 
-//       `[Document: ${chunk.filename} - Page ${chunk.page_start || 'N/A'}]\n${chunk.content.substring(0, 2000)}`
-//     ).join("\n\n---\n\n");
-
-//     console.log(`[queryFolderDocuments] Context text length: ${contextText.length} characters`);
-
-//     // Enhanced prompt for better responses
-//     const prompt = `
-// You are an AI assistant analyzing a collection of documents in folder "${folderName}". 
-
-// USER QUESTION: "${question}"
-
-// DOCUMENT CONTENT:
-// ${contextText}
-
-// INSTRUCTIONS:
-// 1. Provide a comprehensive, detailed answer based on the document content
-// 2. If information spans multiple documents, clearly indicate which documents contain what information
-// 3. Use specific details, quotes, and examples from the documents when possible
-// 4. If you can partially answer the question, provide what information is available and note what might be missing
-// 5. Be thorough and helpful - synthesize information across all relevant documents
-// 6. If the question asks about relationships or connections, analyze how the documents relate to each other
-
-// Provide your answer:`;
-
-//     const answer = await queryFolderWithGemini(prompt);
-//     console.log(`[queryFolderDocuments] Generated answer length: ${answer.length} characters`);
-
-//     // Save the chat interaction
-//     let savedChat;
-//     try {
-//       savedChat = await FolderChat.saveFolderChat(
-//         userId,
-//         folderName,
-//         question,
-//         answer,
-//         sessionId,
-//         processedFiles.map(f => f.id)
-//       );
-//     } catch (chatError) {
-//       console.warn(`[queryFolderDocuments] Failed to save chat:`, chatError.message);
-//       // Fallback - create a session ID for response continuity
-//       savedChat = { session_id: sessionId || uuidv4() };
-//     }
-
-//     // Prepare sources with more detail
-//     const sources = relevantChunks.map(chunk => ({
-//       document: chunk.filename,
-//       content: chunk.content.substring(0, 400) + (chunk.content.length > 400 ? "..." : ""),
-//       page: chunk.page_start || 'N/A',
-//       relevanceScore: chunk.similarity_score || 0
-//     }));
-
-//     return res.json({
-//       answer,
-//       sources,
-//       sessionId: savedChat.session_id,
-//       folderName,
-//       documentsSearched: processedFiles.length,
-//       chunksFound: relevantChunks.length,
-//       totalChunks: allChunks.length,
-//       searchMethod: questionWords.length > 0 ? 'keyword_search' : 'document_sampling'
-//     });
-
-//   } catch (error) {
-//     console.error("❌ queryFolderDocuments error:", error);
-//     res.status(500).json({ 
-//       error: "Failed to process query", 
-//       details: error.message 
-//     });
-//   }
-// };
-// exports.queryFolderDocuments = async (req, res) => {
-//   let chatCost;
-//   let userId = null;
-
-//   try {
-//     const {
-//       folderName,
-//     } = req.params;
-
-//     const {
-//       question,
-//       used_secret_prompt = false,
-//       prompt_label = null,
-//       session_id = null, // ✅ allow frontend to pass session
-//       maxResults = 10,
-//     } = req.body;
-
-//     userId = req.user.id;
-
-//     // Validation
-//     if (!folderName || !question) {
-//       console.error("❌ Chat Error: folderName or question missing.");
-//       return res.status(400).json({ error: "folderName and question are required." });
-//     }
-
-//     console.log(`[chatWithFolder] Processing query for folder: ${folderName}, user: ${userId}`);
-//     console.log(`[chatWithFolder] Question: ${question}`);
-
-//     // Get processed files in folder
-//     const files = await File.findByUserIdAndFolderPath(userId, folderName);
-//     const processedFiles = files.filter(f => !f.is_folder && f.status === "processed");
-//     if (processedFiles.length === 0) {
-//       return res.status(404).json({
-//         error: "No processed documents in folder",
-//         debug: { totalFiles: files.length, processedFiles: 0 }
-//       });
-//     }
-
-//     // Collect chunks
-//     let allChunks = [];
-//     for (const file of processedFiles) {
-//       const chunks = await FileChunk.getChunksByFileId(file.id);
-//       const chunksWithFileInfo = chunks.map(chunk => ({
-//         ...chunk,
-//         filename: file.originalname,
-//         file_id: file.id
-//       }));
-//       allChunks = allChunks.concat(chunksWithFileInfo);
-//     }
-
-//     if (allChunks.length === 0) {
-//       return res.status(400).json({
-//         error: "The documents in this folder have no processed content yet."
-//       });
-//     }
-
-//     // Token cost
-//     const chatContentLength = question.length + allChunks.reduce((sum, c) => sum + c.content.length, 0);
-//     chatCost = Math.ceil(chatContentLength / 100);
-
-//     console.warn(`⚠️ Token reservation bypassed for user ${userId}.`);
-
-//     // Find relevant chunks (very simplified keyword search)
-//     const questionEmbedding = await generateEmbedding(question);
-//     const relevantChunks = await ChunkVector.findNearestChunksAcrossFiles(
-//       questionEmbedding,
-//       maxResults,
-//       processedFiles.map(f => f.id)
-//     );
-
-//     const relevantChunkContents = relevantChunks.map((chunk) => chunk.content);
-//     const usedChunkIds = relevantChunks.map((chunk) => chunk.chunk_id);
-
-//     let answer;
-//     if (relevantChunkContents.length === 0) {
-//       answer = await askGemini(
-//         "No relevant context found in the folder documents.",
-//         question
-//       );
-//     } else {
-//       const context = relevantChunkContents.join("\n\n");
-//       answer = await askGemini(context, question);
-//     }
-
-//     // Store chat
-//     const storedQuestion = used_secret_prompt
-//       ? `[${prompt_label || "Secret Prompt"}]`
-//       : question;
-
-//     const savedChat = await FolderChat.saveFolderChat(
-//       userId,
-//       folderName,
-//       storedQuestion,
-//       answer,
-//       session_id, // ✅ if null, new session is created
-//       processedFiles.map(f => f.id), // summarized_file_ids
-//       usedChunkIds,
-//       used_secret_prompt,
-//       used_secret_prompt ? prompt_label : null
-//     );
-
-//     console.warn(`⚠️ Token commitment bypassed for user ${userId}.`);
-
-//     // ✅ Fetch full session history
-//     const history = await FolderChat.getFolderChatHistory(userId, folderName, savedChat.session_id);
-
-//     return res.json({
-//       session_id: savedChat.session_id,
-//       answer,
-//       history, // ✅ return full conversation thread
-//     });
-//   } catch (error) {
-//     console.error("❌ Error chatting with folder:", error);
-//     if (chatCost && userId) {
-//       console.warn(`⚠️ Token rollback bypassed for user ${userId}.`);
-//     }
-//     return res.status(500).json({
-//       error: "Failed to get AI answer.",
-//       details: error.message,
-//     });
-//   }
-// };
-
-
-// exports.queryFolderDocuments = async (req, res) => {
-//   let chatCost;
-//   let userId = null;
-
-//   try {
-//     const {
-//       folderName,
-//     } = req.params;
-
-//     const {
-//       question,
-//       used_secret_prompt = false,
-//       prompt_label = null,
-//       session_id = null, // ✅ allow frontend to pass session
-//       maxResults = 10,
-//     } = req.body;
-
-//     userId = req.user.id;
-
-//     // Validation
-//     if (!folderName || !question) {
-//       console.error("❌ Chat Error: folderName or question missing.");
-//       return res
-//         .status(400)
-//         .json({ error: "folderName and question are required." });
-//     }
-
-//     console.log(`[chatWithFolder] Processing query for folder: ${folderName}, user: ${userId}`);
-//     console.log(`[chatWithFolder] Question: ${question}`);
-
-//     // Get processed files in folder
-//     const files = await File.findByUserIdAndFolderPath(userId, folderName);
-//     const processedFiles = files.filter(f => !f.is_folder && f.status === "processed");
-
-//     if (processedFiles.length === 0) {
-//       return res.status(404).json({
-//         error: "No processed documents in folder",
-//         debug: { totalFiles: files.length, processedFiles: 0 }
-//       });
-//     }
-
-//     // Collect chunks across all files
-//     let allChunks = [];
-//     for (const file of processedFiles) {
-//       const chunks = await FileChunk.getChunksByFileId(file.id);
-//       const chunksWithFileInfo = chunks.map(chunk => ({
-//         ...chunk,
-//         filename: file.originalname,
-//         file_id: file.id
-//       }));
-//       allChunks = allChunks.concat(chunksWithFileInfo);
-//     }
-
-//     if (allChunks.length === 0) {
-//       return res.status(400).json({
-//         error: "The documents in this folder have no processed content yet."
-//       });
-//     }
-
-//     // Token cost (rough estimate)
-//     const chatContentLength = question.length + allChunks.reduce((sum, c) => sum + c.content.length, 0);
-//     chatCost = Math.ceil(chatContentLength / 100);
-
-//     // 🚨 Token reservation bypassed
-//     console.warn(`⚠️ Token reservation bypassed for user ${userId}.`);
-
-//     // Find context
-//     const questionEmbedding = await generateEmbedding(question);
-//     const relevantChunks = await ChunkVector.findNearestChunksAcrossFiles(
-//       questionEmbedding,
-//       maxResults,
-//       processedFiles.map(f => f.id)
-//     );
-
-//     const relevantChunkContents = relevantChunks.map((chunk) => chunk.content);
-//     const usedChunkIds = relevantChunks.map((chunk) => chunk.chunk_id);
-
-//     let answer;
-//     if (relevantChunkContents.length === 0) {
-//       answer = await askGemini(
-//         "No relevant context found in the folder documents.",
-//         question
-//       );
-//     } else {
-//       const context = relevantChunkContents.join("\n\n");
-//       answer = await askGemini(context, question);
-//     }
-
-//     // Store chat
-//     const storedQuestion = used_secret_prompt
-//       ? `[${prompt_label || "Secret Prompt"}]`
-//       : question;
-
-//     const savedChat = await FolderChat.saveFolderChat(
-//       userId,
-//       folderName,
-//       storedQuestion,
-//       answer,
-//       session_id, // ✅ if null, new session is created
-//       processedFiles.map(f => f.id), // summarized_file_ids
-//       usedChunkIds,
-//       used_secret_prompt,
-//       used_secret_prompt ? prompt_label : null
-//     );
-
-//     // 🚨 Token commit bypassed
-//     console.warn(`⚠️ Token commitment bypassed for user ${userId}.`);
-
-//     // ✅ Fetch full session history so frontend gets all messages live
-//     const history = await FolderChat.getFolderChatHistory(userId, folderName, savedChat.session_id);
-
-//     return res.json({
-//       session_id: savedChat.session_id,
-//       answer,
-//       history, // ✅ full conversation thread
-//     });
-//   } catch (error) {
-//     console.error("❌ Error chatting with folder:", error);
-//     if (chatCost && userId) {
-//       console.warn(`⚠️ Token rollback bypassed for user ${userId}.`);
-//     }
-//     return res
-//       .status(500)
-//       .json({ error: "Failed to get AI answer.", details: error.message });
-//   }
-// };
 
 
 exports.queryFolderDocuments = async (req, res) => {

@@ -10,6 +10,8 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 // Create folder
 router.post("/create-folder", authMiddleware.protect, fileController.createFolder);
+router.post("/create", authMiddleware.protect, fileController.createCase);
+
 
 // Get all folders for a user
 router.get("/folders", authMiddleware.protect, fileController.getFolders);

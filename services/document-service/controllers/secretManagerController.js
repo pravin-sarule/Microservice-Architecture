@@ -1737,149 +1737,16 @@ const getAllSecrets = async (req, res) => {
   }
 };
 
-/**
- * 🧩 Trigger LLM with a secret-based prompt
- * @route POST /api/secrets/trigger-llm
- */
-// const triggerSecretLLM = async (req, res) => {
-//   const { secretId, fileId, additionalInput = "" } = req.body;
 
-//   console.log(`[triggerSecretLLM] Request body:`, {
-//     secretId,
-//     fileId,
-//     additionalInput: additionalInput ? additionalInput.substring(0, 50) + '...' : '(empty)'
-//   });
-
-//   // -------------------------------
-//   // 1️⃣ Input Validation
-//   // -------------------------------
-//   if (!secretId) return res.status(400).json({ error: '❌ secretId is required.' });
-//   if (!fileId) return res.status(400).json({ error: '❌ fileId is required.' });
-
-//   try {
-//     console.log(`[triggerSecretLLM] Starting process for secretId: ${secretId}, fileId: ${fileId}`);
-
-//     // -------------------------------
-//     // 2️⃣ Fetch secret configuration from DB
-//     // -------------------------------
-//     const query = `
-//       SELECT
-//         s.id,
-//         s.name,
-//         s.secret_manager_id,
-//         s.version,
-//         s.llm_id,
-//         l.name AS llm_name
-//       FROM secret_manager s
-//       LEFT JOIN llm_models l ON s.llm_id = l.id
-//       WHERE s.id = $1
-//     `;
-//     const result = await db.query(query, [secretId]);
-
-//     if (result.rows.length === 0) {
-//       return res.status(404).json({ error: '❌ Secret configuration not found in DB.' });
-//     }
-
-//     const { name: secretName, secret_manager_id, version, llm_name } = result.rows[0];
-//     console.log(`[triggerSecretLLM] Found secret: ${secretName}, LLM from DB: ${llm_name || 'none'}`);
-
-//     // -------------------------------
-//     // 3️⃣ Resolve provider name dynamically
-//     // -------------------------------
-//     let provider = resolveProviderName(llm_name);
-//     console.log(`[triggerSecretLLM] Resolved LLM provider: ${provider}`);
-
-//     // Validate provider availability
-//     const availableProviders = getAvailableProviders();
-//     if (!availableProviders[provider] || !availableProviders[provider].available) {
-//       console.warn(`[triggerSecretLLM] Provider '${provider}' unavailable — falling back to gemini`);
-//       provider = 'gemini';
-//     }
-
-//     // -------------------------------
-//     // 4️⃣ Fetch secret value from GCP Secret Manager
-//     // -------------------------------
-//     const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
-//     console.log(`[triggerSecretLLM] Fetching secret from GCP: ${gcpSecretName}`);
-
-//     const [accessResponse] = await secretClient.accessSecretVersion({ name: gcpSecretName });
-//     const secretValue = accessResponse.payload.data.toString('utf8');
-
-//     if (!secretValue || secretValue.trim().length === 0) {
-//       return res.status(500).json({ error: '❌ Secret value is empty in GCP.' });
-//     }
-
-//     console.log(`[triggerSecretLLM] Secret value length: ${secretValue.length} characters`);
-
-//     // -------------------------------
-//     // 5️⃣ Fetch document content from DB
-//     // -------------------------------
-//     const FileChunkModel = require('../models/FileChunk');
-//     const allChunks = await FileChunkModel.getChunksByFileId(fileId);
-
-//     if (!allChunks || allChunks.length === 0) {
-//       return res.status(404).json({ error: '❌ No document content found for this file.' });
-//     }
-
-//     const documentContent = allChunks.map((c) => c.content).join('\n\n');
-//     console.log(`[triggerSecretLLM] Document content length: ${documentContent.length} characters`);
-
-//     // -------------------------------
-//     // 6️⃣ Construct final prompt
-//     // -------------------------------
-//     let finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n`;
-//     finalPrompt += `${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${documentContent}`;
-
-//     if (additionalInput && additionalInput.trim().length > 0) {
-//       finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additionalInput.trim()}`;
-//     }
-
-//     console.log(`[triggerSecretLLM] Final prompt constructed:`);
-//     console.log(`  - Total length: ${finalPrompt.length}`);
-//     console.log(`  - Secret instructions: ${secretValue.length}`);
-//     console.log(`  - Document content: ${documentContent.length}`);
-//     console.log(`  - Additional input: ${additionalInput ? additionalInput.trim().length : 0}`);
-
-//     // -------------------------------
-//     // 7️⃣ Trigger the LLM via askLLM
-//     // -------------------------------
-//     console.log(`[triggerSecretLLM] Calling askLLM with provider: ${provider}...`);
-//     const llmResponse = await askLLM(provider, finalPrompt, '');
-
-//     if (!llmResponse || llmResponse.trim().length === 0) {
-//       throw new Error(`Empty response received from ${provider}`);
-//     }
-
-//     console.log(`[triggerSecretLLM] ✅ LLM response received (${llmResponse.length} characters)`);
-
-//     // -------------------------------
-//     // 8️⃣ Return success response
-//     // -------------------------------
-//     return res.status(200).json({
-//       success: true,
-//       secretManagerId: secret_manager_id,
-//       llmProvider: provider,
-//       response: llmResponse,
-//       session_id: req.body.session_id || `session-${Date.now()}`,
-//       used_chunk_ids: allChunks.map(c => c.id),
-//     });
-
-//   } catch (err) {
-//     console.error('🚨 Error in triggerSecretLLM:', err);
-//     res.status(500).json({
-//       error: `Internal Server Error: ${err.message}`,
-//       stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
-//     });
-//   }
-// };
 
 const triggerSecretLLM = async (req, res) => {
-  const { secretId, fileId, additionalInput = "", sessionId } = req.body;
+  const { secretId, fileId, additionalInput = "", sessionId, llm_name: requestLlmName } = req.body; // Add requestLlmName
 
   console.log(`[triggerSecretLLM] Request body:`, {
     secretId,
     fileId,
     sessionId,
+    llm_name: requestLlmName, // Log the new field
     additionalInput: additionalInput ? additionalInput.substring(0, 50) + '...' : '(empty)'
   });
 
@@ -1922,14 +1789,15 @@ const triggerSecretLLM = async (req, res) => {
       return res.status(404).json({ error: '❌ Secret configuration not found in DB.' });
     }
 
-    const { name: secretName, secret_manager_id, version, llm_name } = result.rows[0];
-    console.log(`[triggerSecretLLM] Found secret: ${secretName}, LLM from DB: ${llm_name || 'none'}`);
+    const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } = result.rows[0]; // Rename llm_name to dbLlmName
+    console.log(`[triggerSecretLLM] Found secret: ${secretName}, LLM from DB: ${dbLlmName || 'none'}`);
 
     // -------------------------------
     // 3️⃣ Resolve provider name dynamically
     // -------------------------------
-    let provider = resolveProviderName(llm_name);
-    console.log(`[triggerSecretLLM] Resolved LLM provider: ${provider}`);
+    // Prioritize llm_name from request body, then from DB, then default
+    let provider = resolveProviderName(requestLlmName || dbLlmName);
+    console.log(`[triggerSecretLLM] Resolved LLM provider: ${provider} (Source: ${requestLlmName ? 'Request Body' : (dbLlmName ? 'Database' : 'Default')})`);
 
     // Validate provider availability
     const availableProviders = getAvailableProviders();
@@ -2011,7 +1879,7 @@ const triggerSecretLLM = async (req, res) => {
         secret_id,
         used_chunk_ids,
         created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::int[], NOW())
       RETURNING id, created_at
     `;
 
@@ -2026,7 +1894,7 @@ const triggerSecretLLM = async (req, res) => {
       true,  // used_secret_prompt = true
       secretName,  // prompt_label
       secretId,
-      chunkIds  // Store as PostgreSQL array
+      chunkIds  // Store as PostgreSQL array with explicit cast
     ]);
 
     const messageId = chatResult.rows[0].id;
