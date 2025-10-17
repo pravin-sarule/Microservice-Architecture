@@ -822,8 +822,8 @@ class ApiService {
     return this.request(`/files/secrets/${secretId}`);
   }
 
-  // ✅ UPDATED: triggerLLMWithSecret method to include llmName, sessionId, and question
-  async triggerLLMWithSecret(secretId, fileId, additionalInput = "", promptLabel = "", aiResponse = "", llmName = null, sessionId = null, question = "") {
+  // ✅ UPDATED: triggerLLMWithSecret method
+  async triggerLLMWithSecret(secretId, fileId, additionalInput = "", promptLabel = "", aiResponse = "") {
     return this.request("/files/trigger-llm", {
       method: "POST",
       body: JSON.stringify({
@@ -831,10 +831,7 @@ class ApiService {
         fileId,
         additionalInput,
         prompt_label: promptLabel,
-        ai_response: aiResponse,
-        llm_name: llmName, // Include llmName in the request body
-        session_id: sessionId, // Include sessionId for chat storage
-        question: question // Include the cleaned prompt as the question
+        ai_response: aiResponse
       }),
     });
   }

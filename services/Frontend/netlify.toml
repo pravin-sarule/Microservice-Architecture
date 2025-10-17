@@ -1,10 +1,6 @@
 [build]
-  base = "services/Frontend"       # Netlify runs npm commands here
-  publish = "dist"                 # relative to base, points to services/Frontend/dist
-  command = "npm ci && npm run build"  # install dependencies and build
-
-[build.environment]
-  NODE_VERSION = "20.19.4"        # match your local Node version
+  publish = "dist"
+  command = "npm run build"
 
 [[redirects]]
   from = "/*"
