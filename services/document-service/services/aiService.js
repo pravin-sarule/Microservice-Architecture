@@ -2670,6 +2670,7 @@ const PROVIDER_ALIASES = {
   'gemini': 'gemini',
   'gemini-pro': 'gemini-pro-2.5',
   'gemini-pro-2.5': 'gemini-pro-2.5',
+  'gemini-2.5-pro': 'gemini-pro-2.5',
   'gemini-2.0-flash': 'gemini',
   'gemini-1.5-flash': 'gemini',
 
@@ -2690,7 +2691,7 @@ const PROVIDER_ALIASES = {
 // ---------------------------
 const GEMINI_MODELS = {
   gemini: ['gemini-2.0-flash-exp', 'gemini-1.5-flash'],
-  'gemini-pro-2.5': ['gemini-2.0-pro-exp', 'gemini-1.5-pro', 'gemini-2.0-flash-exp'],
+  'gemini-pro-2.5': ['gemini-2.5-pro', 'gemini-2.0-pro-exp', 'gemini-1.5-pro', 'gemini-2.0-flash-exp'],
 };
 
 // ---------------------------
@@ -2796,7 +2797,7 @@ function getAvailableProviders() {
     Object.entries({
       ...LLM_CONFIGS,
       gemini: { model: 'gemini-2.0-flash-exp', headers: {} },
-      'gemini-pro-2.5': { model: 'gemini-2.0-pro-exp', headers: {} },
+      'gemini-pro-2.5': { model: 'gemini-2.5-pro', headers: {} },
     }).map(([provider, cfg]) => {
       let key;
       if (provider.startsWith('gemini')) key = process.env.GEMINI_API_KEY;

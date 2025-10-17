@@ -1,4 +1,11 @@
 
+
+
+
+
+
+
+
 // const express = require('express');
 // const morgan = require('morgan');
 // const cors = require('cors');
@@ -10,7 +17,6 @@
 // const chatRoutes = require('./routes/chatRoutes');
 // const secretManagerRoutes = require('./routes/secretManagerRoutes');
 // const fileRoutes = require('./routes/fileRoutes');
-// const contentRoutes = require('./routes/contentRoutes');
 
 // const app = express();
 
@@ -31,7 +37,6 @@
 // app.use('/api/doc', chatRoutes);
 // app.use('/api/doc', secretManagerRoutes);
 // app.use('/api/files', fileRoutes);
-// app.use('/api/content', contentRoutes);
 
 // // Test route
 // app.get('/api/test-route', (req, res) => {
@@ -50,6 +55,7 @@
 //   console.error(`❌ Unhandled Rejection: ${err.message}`);
 //   process.exit(1);
 // });
+
 
 
 
@@ -79,7 +85,7 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 app.use(cors({
-  origin: 'http://localhost:5173', // or '*' for all origins
+  origin: 'https://nexintelagent.netlify.app', // or '*' for all origins
   methods: ['GET','POST','PUT','DELETE','OPTIONS'],
   credentials: true // if you need cookies or auth headers
 }));
@@ -108,6 +114,12 @@ process.on('unhandledRejection', (err) => {
   console.error(`❌ Unhandled Rejection: ${err.message}`);
   process.exit(1);
 });
+
+
+
+
+
+
 
 
 
