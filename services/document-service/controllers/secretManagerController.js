@@ -1570,8 +1570,9 @@ const fetchSecretValueFromGCP = async (req, res) => {
     console.log('📦 Fetching secret config from DB for ID:', id);
 
     const query = `
-      SELECT s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
+      SELECT s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name, cm.method_name AS chunking_method
       FROM secret_manager s
+      LEFT JOIN chunking_methods cm ON s.chunking_method_id = cm.id
       LEFT JOIN llm_models l ON s.llm_id = l.id
       WHERE s.id = $1
     `;
@@ -1581,7 +1582,7 @@ const fetchSecretValueFromGCP = async (req, res) => {
       return res.status(404).json({ error: '❌ Secret config not found in DB' });
     }
 
-    const { secret_manager_id, version, llm_id, llm_name } = result.rows[0];
+    const { secret_manager_id, version, llm_id, llm_name, chunking_method } = result.rows[0];
     const secretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
     console.log('🔐 Fetching from GCP Secret Manager:', secretName);
 
@@ -1593,6 +1594,7 @@ const fetchSecretValueFromGCP = async (req, res) => {
       version,
       llm_id,
       llm_name,
+      chunking_method, // Include chunking_method
       value: secretValue,
     });
   } catch (err) {
@@ -1602,7 +1604,7 @@ const fetchSecretValueFromGCP = async (req, res) => {
 };
 
 /**
- * 🧩 Create secret with optional LLM mapping
+ * 🧩 Create secret with optional LLM and chunking method mapping
  * @route POST /api/secrets/create
  */
 const createSecretInGCP = async (req, res) => {
@@ -1612,6 +1614,7 @@ const createSecretInGCP = async (req, res) => {
     secret_manager_id,
     secret_value,
     llm_id,
+    chunking_method, // NEW: Add chunking_method
     version = '1',
     created_by = 1,
     template_type = 'system',
@@ -1655,13 +1658,13 @@ const createSecretInGCP = async (req, res) => {
         usage_count, success_rate, avg_processing_time,
         created_by, updated_by, created_at, updated_at,
         activated_at, last_used_at, template_metadata,
-        secret_manager_id, version, llm_id
+        secret_manager_id, version, llm_id, chunking_method
       ) VALUES (
         gen_random_uuid(), $1, $2, $3, $4,
         $5, $6, $7,
         $8, $8, now(), now(),
         now(), NULL, $9::jsonb,
-        $10, $11, $12
+        $10, $11, $12, $13
       )
       RETURNING *;
     `;
@@ -1679,6 +1682,7 @@ const createSecretInGCP = async (req, res) => {
       secret_manager_id,
       versionId,
       llm_id || null,
+      chunking_method || null, // NEW: Add chunking_method
     ]);
 
     res.status(201).json({
@@ -1739,15 +1743,278 @@ const getAllSecrets = async (req, res) => {
 
 
 
+// const triggerSecretLLM = async (req, res) => {
+//   const { secretId, fileId, additionalInput = "", sessionId, llm_name: requestLlmName } = req.body; // Add requestLlmName
+
+//   console.log(`[triggerSecretLLM] Request body:`, {
+//     secretId,
+//     fileId,
+//     sessionId,
+//     llm_name: requestLlmName, // Log the new field
+//     additionalInput: additionalInput ? additionalInput.substring(0, 50) + '...' : '(empty)'
+//   });
+
+//   // -------------------------------
+//   // 1️⃣ Input Validation
+//   // -------------------------------
+//   if (!secretId) return res.status(400).json({ error: '❌ secretId is required.' });
+//   if (!fileId) return res.status(400).json({ error: '❌ fileId is required.' });
+
+//   // Get user ID from authenticated request
+//   const userId = req.user?.id || req.userId;
+//   if (!userId) {
+//     return res.status(401).json({ error: '❌ User authentication required.' });
+//   }
+
+//   // Generate or use existing session ID
+//   const finalSessionId = sessionId || uuidv4();
+
+//   try {
+//     console.log(`[triggerSecretLLM] Starting process for secretId: ${secretId}, fileId: ${fileId}`);
+
+//     // -------------------------------
+//     // 2️⃣ Fetch secret configuration from DB
+//     // -------------------------------
+//     const query = `
+//       SELECT
+//         s.id,
+//         s.name,
+//         s.secret_manager_id,
+//         s.version,
+//         s.llm_id,
+//         l.name AS llm_name,
+//         cm.method_name AS chunking_method
+//       FROM secret_manager s
+//       LEFT JOIN chunking_methods cm ON s.chunking_method_id = cm.id
+//       LEFT JOIN llm_models l ON s.llm_id = l.id
+//       WHERE s.id = $1
+//     `;
+//     const result = await db.query(query, [secretId]);
+
+//     if (result.rows.length === 0) {
+//       return res.status(404).json({ error: '❌ Secret configuration not found in DB.' });
+//     }
+
+//     const { name: secretName, secret_manager_id, version, llm_name: dbLlmName, chunking_method: dbChunkingMethod } = result.rows[0]; // Rename llm_name to dbLlmName, add chunking_method
+//     console.log(`[triggerSecretLLM] Found secret: ${secretName}, LLM from DB: ${dbLlmName || 'none'}, Chunking Method from DB: ${dbChunkingMethod || 'none'}`);
+
+//     // -------------------------------
+//     // 3️⃣ Resolve provider name dynamically
+//     // -------------------------------
+//     // Prioritize llm_name from request body, then from DB, then default
+//     let provider = resolveProviderName(requestLlmName || dbLlmName);
+//     console.log(`[triggerSecretLLM] Resolved LLM provider: ${provider} (Source: ${requestLlmName ? 'Request Body' : (dbLlmName ? 'Database' : 'Default')})`);
+
+//     // Validate provider availability
+//     const availableProviders = getAvailableProviders();
+//     if (!availableProviders[provider] || !availableProviders[provider].available) {
+//       console.warn(`[triggerSecretLLM] Provider '${provider}' unavailable — falling back to gemini`);
+//       provider = 'gemini';
+//     }
+
+//     // -------------------------------
+//     // 4️⃣ Fetch secret value from GCP Secret Manager
+//     // -------------------------------
+//     const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
+//     console.log(`[triggerSecretLLM] Fetching secret from GCP: ${gcpSecretName}`);
+
+//     const [accessResponse] = await secretClient.accessSecretVersion({ name: gcpSecretName });
+//     const secretValue = accessResponse.payload.data.toString('utf8');
+
+//     if (!secretValue || secretValue.trim().length === 0) {
+//       return res.status(500).json({ error: '❌ Secret value is empty in GCP.' });
+//     }
+
+//     console.log(`[triggerSecretLLM] Secret value length: ${secretValue.length} characters`);
+
+//     // -------------------------------
+//     // 5️⃣ Fetch document content from DB
+//     // -------------------------------
+//     const FileChunkModel = require('../models/FileChunk');
+//     const allChunks = await FileChunkModel.getChunksByFileId(fileId);
+
+//     if (!allChunks || allChunks.length === 0) {
+//       return res.status(404).json({ error: '❌ No document content found for this file.' });
+//     }
+
+//     const documentContent = allChunks.map((c) => c.content).join('\n\n');
+//     console.log(`[triggerSecretLLM] Document content length: ${documentContent.length} characters`);
+
+//     // -------------------------------
+//     // 6️⃣ Construct final prompt
+//     // -------------------------------
+//     let finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n`;
+//     finalPrompt += `${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${documentContent}`;
+
+//     if (additionalInput && additionalInput.trim().length > 0) {
+//       finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additionalInput.trim()}`;
+//     }
+
+//     console.log(`[triggerSecretLLM] Final prompt constructed:`);
+//     console.log(`  - Total length: ${finalPrompt.length}`);
+//     console.log(`  - Secret instructions: ${secretValue.length}`);
+//     console.log(`  - Document content: ${documentContent.length}`);
+//     console.log(`  - Additional input: ${additionalInput ? additionalInput.trim().length : 0}`);
+
+//     // -------------------------------
+//     // 7️⃣ Trigger the LLM via askLLM
+//     // -------------------------------
+//     console.log(`[triggerSecretLLM] Calling askLLM with provider: ${provider}...`);
+//     const llmResponse = await askLLM(provider, finalPrompt, '');
+
+//     if (!llmResponse || llmResponse.trim().length === 0) {
+//       throw new Error(`Empty response received from ${provider}`);
+//     }
+
+//     console.log(`[triggerSecretLLM] ✅ LLM response received (${llmResponse.length} characters)`);
+
+//     // -------------------------------
+//     // 8️⃣ ✅ STORE CHAT IN DATABASE
+//     // -------------------------------
+//     console.log(`[triggerSecretLLM] Storing chat in database...`);
+    
+//     const insertChatQuery = `
+//       INSERT INTO file_chats (
+//         file_id,
+//         session_id,
+//         user_id,
+//         question,
+//         answer,
+//         used_secret_prompt,
+//         prompt_label,
+//         secret_id,
+//         used_chunk_ids,
+//         created_at
+//       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::int[], NOW())
+//       RETURNING id, created_at
+//     `;
+
+//     const chunkIds = allChunks.map(c => c.id);
+    
+//     const chatResult = await db.query(insertChatQuery, [
+//       fileId,
+//       finalSessionId,
+//       userId,
+//       secretName,  // ✅ Store the secret/prompt name as the question
+//       llmResponse,
+//       true,  // used_secret_prompt = true
+//       secretName,  // prompt_label
+//       secretId,
+//       chunkIds  // Store as PostgreSQL array with explicit cast
+//     ]);
+
+//     const messageId = chatResult.rows[0].id;
+//     const createdAt = chatResult.rows[0].created_at;
+
+//     console.log(`[triggerSecretLLM] ✅ Chat stored in DB with ID: ${messageId}`);
+
+//     // -------------------------------
+//     // 9️⃣ ✅ FETCH COMPLETE CHAT HISTORY FOR THIS SESSION
+//     // -------------------------------
+//     const historyQuery = `
+//       SELECT 
+//         id,
+//         file_id,
+//         session_id,
+//         question,
+//         answer,
+//         used_secret_prompt,
+//         prompt_label,
+//         secret_id,
+//         used_chunk_ids,
+//         created_at as timestamp
+//       FROM file_chats
+//       WHERE file_id = $1 AND session_id = $2 AND user_id = $3
+//       ORDER BY created_at ASC
+//     `;
+
+//     const historyResult = await db.query(historyQuery, [fileId, finalSessionId, userId]);
+    
+//     const history = historyResult.rows.map(row => ({
+//       id: row.id,
+//       file_id: row.file_id,
+//       session_id: row.session_id,
+//       question: row.question,
+//       answer: row.answer,
+//       used_secret_prompt: row.used_secret_prompt,
+//       prompt_label: row.prompt_label,
+//       secret_id: row.secret_id,
+//       used_chunk_ids: typeof row.used_chunk_ids === 'string'
+//         ? JSON.parse(row.used_chunk_ids)
+//         : row.used_chunk_ids,
+//       timestamp: row.timestamp,
+//       display_text_left_panel: row.used_secret_prompt
+//         ? `Analysis: ${row.prompt_label}`
+//         : row.question
+//     }));
+
+//     console.log(`[triggerSecretLLM] ✅ Fetched ${history.length} messages from chat history`);
+
+//     // -------------------------------
+//     // 🔟 Return success response with history
+//     // -------------------------------
+//     return res.status(200).json({
+//       success: true,
+//       answer: llmResponse,  // Keep 'answer' for compatibility
+//       response: llmResponse,  // Keep 'response' for compatibility
+//       message_id: messageId,
+//       session_id: finalSessionId,
+//       secretManagerId: secret_manager_id,
+//       llmProvider: provider,
+//       used_chunk_ids: chunkIds,
+//       history: history,  // ✅ Return complete chat history
+//       timestamp: createdAt,
+//       chunkingMethod: dbChunkingMethod, // Include chunking method in response
+//     });
+
+//   } catch (err) {
+//     console.error('🚨 Error in triggerSecretLLM:', err);
+//     res.status(500).json({
+//       error: `Internal Server Error: ${err.message}`,
+//       stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+//     });
+//   }
+// };
+
+// /**
+//  * Helper function to fetch secret details by ID directly from the database.
+//  * This is used internally by other controllers, not exposed as an API route.
+//  */
+// const getSecretDetailsById = async (secretId) => {
+//   try {
+//     const query = `
+//       SELECT
+//         s.id,
+//         s.name,
+//         s.secret_manager_id,
+//         s.version,
+//         s.llm_id,
+//         l.name AS llm_name,
+//         cm.method_name AS chunking_method
+//       FROM secret_manager s
+//       LEFT JOIN chunking_methods cm ON s.chunking_method_id = cm.id
+//       LEFT JOIN llm_models l ON s.llm_id = l.id
+//       WHERE s.id = $1
+//     `;
+//     const result = await db.query(query, [secretId]);
+//     return result.rows[0]; // Return the first row or undefined
+//   } catch (error) {
+//     console.error(`🚨 Error in getSecretDetailsById for secret ${secretId}:`, error.message);
+//     throw error;
+//   }
+// };
+
+
+// -----------------------------------------------------------
 const triggerSecretLLM = async (req, res) => {
-  const { secretId, fileId, additionalInput = "", sessionId, llm_name: requestLlmName } = req.body; // Add requestLlmName
+  const { secretId, fileId, additionalInput = "", sessionId, llm_name: requestLlmName } = req.body;
 
   console.log(`[triggerSecretLLM] Request body:`, {
     secretId,
     fileId,
     sessionId,
-    llm_name: requestLlmName, // Log the new field
-    additionalInput: additionalInput ? additionalInput.substring(0, 50) + '...' : '(empty)'
+    llm_name: requestLlmName,
+    additionalInput: additionalInput ? additionalInput.substring(0, 50) + '...' : '(empty)',
   });
 
   // -------------------------------
@@ -1756,13 +2023,9 @@ const triggerSecretLLM = async (req, res) => {
   if (!secretId) return res.status(400).json({ error: '❌ secretId is required.' });
   if (!fileId) return res.status(400).json({ error: '❌ fileId is required.' });
 
-  // Get user ID from authenticated request
   const userId = req.user?.id || req.userId;
-  if (!userId) {
-    return res.status(401).json({ error: '❌ User authentication required.' });
-  }
+  if (!userId) return res.status(401).json({ error: '❌ User authentication required.' });
 
-  // Generate or use existing session ID
   const finalSessionId = sessionId || uuidv4();
 
   try {
@@ -1778,28 +2041,34 @@ const triggerSecretLLM = async (req, res) => {
         s.secret_manager_id,
         s.version,
         s.llm_id,
-        l.name AS llm_name
+        l.name AS llm_name,
+        cm.method_name AS chunking_method
       FROM secret_manager s
+      LEFT JOIN chunking_methods cm ON s.chunking_method_id = cm.id
       LEFT JOIN llm_models l ON s.llm_id = l.id
       WHERE s.id = $1
     `;
     const result = await db.query(query, [secretId]);
-
-    if (result.rows.length === 0) {
+    if (result.rows.length === 0)
       return res.status(404).json({ error: '❌ Secret configuration not found in DB.' });
-    }
 
-    const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } = result.rows[0]; // Rename llm_name to dbLlmName
-    console.log(`[triggerSecretLLM] Found secret: ${secretName}, LLM from DB: ${dbLlmName || 'none'}`);
+    const {
+      name: secretName,
+      secret_manager_id,
+      version,
+      llm_name: dbLlmName,
+      chunking_method: dbChunkingMethod,
+    } = result.rows[0];
+
+    console.log(
+      `[triggerSecretLLM] Found secret: ${secretName}, LLM from DB: ${dbLlmName || 'none'}, Chunking Method from DB: ${dbChunkingMethod || 'none'}`
+    );
 
     // -------------------------------
     // 3️⃣ Resolve provider name dynamically
     // -------------------------------
-    // Prioritize llm_name from request body, then from DB, then default
     let provider = resolveProviderName(requestLlmName || dbLlmName);
-    console.log(`[triggerSecretLLM] Resolved LLM provider: ${provider} (Source: ${requestLlmName ? 'Request Body' : (dbLlmName ? 'Database' : 'Default')})`);
-
-    // Validate provider availability
+    console.log(`[triggerSecretLLM] Resolved LLM provider: ${provider}`);
     const availableProviders = getAvailableProviders();
     if (!availableProviders[provider] || !availableProviders[provider].available) {
       console.warn(`[triggerSecretLLM] Provider '${provider}' unavailable — falling back to gemini`);
@@ -1814,10 +2083,7 @@ const triggerSecretLLM = async (req, res) => {
 
     const [accessResponse] = await secretClient.accessSecretVersion({ name: gcpSecretName });
     const secretValue = accessResponse.payload.data.toString('utf8');
-
-    if (!secretValue || secretValue.trim().length === 0) {
-      return res.status(500).json({ error: '❌ Secret value is empty in GCP.' });
-    }
+    if (!secretValue?.trim()) return res.status(500).json({ error: '❌ Secret value is empty in GCP.' });
 
     console.log(`[triggerSecretLLM] Secret value length: ${secretValue.length} characters`);
 
@@ -1826,10 +2092,8 @@ const triggerSecretLLM = async (req, res) => {
     // -------------------------------
     const FileChunkModel = require('../models/FileChunk');
     const allChunks = await FileChunkModel.getChunksByFileId(fileId);
-
-    if (!allChunks || allChunks.length === 0) {
+    if (!allChunks?.length)
       return res.status(404).json({ error: '❌ No document content found for this file.' });
-    }
 
     const documentContent = allChunks.map((c) => c.content).join('\n\n');
     console.log(`[triggerSecretLLM] Document content length: ${documentContent.length} characters`);
@@ -1839,34 +2103,39 @@ const triggerSecretLLM = async (req, res) => {
     // -------------------------------
     let finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n`;
     finalPrompt += `${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${documentContent}`;
-
-    if (additionalInput && additionalInput.trim().length > 0) {
+    if (additionalInput?.trim().length > 0)
       finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additionalInput.trim()}`;
-    }
 
-    console.log(`[triggerSecretLLM] Final prompt constructed:`);
-    console.log(`  - Total length: ${finalPrompt.length}`);
-    console.log(`  - Secret instructions: ${secretValue.length}`);
-    console.log(`  - Document content: ${documentContent.length}`);
-    console.log(`  - Additional input: ${additionalInput ? additionalInput.trim().length : 0}`);
+    console.log(`[triggerSecretLLM] Final prompt length: ${finalPrompt.length}`);
 
     // -------------------------------
-    // 7️⃣ Trigger the LLM via askLLM
+    // 7️⃣ Trigger the LLM
     // -------------------------------
     console.log(`[triggerSecretLLM] Calling askLLM with provider: ${provider}...`);
     const llmResponse = await askLLM(provider, finalPrompt, '');
-
-    if (!llmResponse || llmResponse.trim().length === 0) {
-      throw new Error(`Empty response received from ${provider}`);
-    }
-
+    if (!llmResponse?.trim()) throw new Error(`Empty response received from ${provider}`);
     console.log(`[triggerSecretLLM] ✅ LLM response received (${llmResponse.length} characters)`);
 
     // -------------------------------
-    // 8️⃣ ✅ STORE CHAT IN DATABASE
+    // 8️⃣ ✅ Link secret_id to the processing job
+    // -------------------------------
+    try {
+      const linkedJob = await ProcessingJobModel.linkSecretToJob(fileId, secretId);
+      if (linkedJob) {
+        console.log(`[triggerSecretLLM] ✅ Linked secret ${secretId} to processing job for file ${fileId}`);
+      } else {
+        console.warn(`[triggerSecretLLM] ⚠️ No existing processing job found to link for file ${fileId}`);
+      }
+    } catch (linkErr) {
+      console.error(`[triggerSecretLLM] ⚠️ Failed to link secret_id to job: ${linkErr.message}`);
+    }
+
+    // -------------------------------
+    // 9️⃣ Store chat record in file_chats
     // -------------------------------
     console.log(`[triggerSecretLLM] Storing chat in database...`);
-    
+    const chunkIds = allChunks.map((c) => c.id);
+
     const insertChatQuery = `
       INSERT INTO file_chats (
         file_id,
@@ -1879,52 +2148,38 @@ const triggerSecretLLM = async (req, res) => {
         secret_id,
         used_chunk_ids,
         created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::int[], NOW())
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::int[],NOW())
       RETURNING id, created_at
     `;
-
-    const chunkIds = allChunks.map(c => c.id);
-    
     const chatResult = await db.query(insertChatQuery, [
       fileId,
       finalSessionId,
       userId,
-      secretName,  // ✅ Store the secret/prompt name as the question
+      secretName,
       llmResponse,
-      true,  // used_secret_prompt = true
-      secretName,  // prompt_label
+      true,
+      secretName,
       secretId,
-      chunkIds  // Store as PostgreSQL array with explicit cast
+      chunkIds,
     ]);
 
     const messageId = chatResult.rows[0].id;
     const createdAt = chatResult.rows[0].created_at;
 
-    console.log(`[triggerSecretLLM] ✅ Chat stored in DB with ID: ${messageId}`);
-
     // -------------------------------
-    // 9️⃣ ✅ FETCH COMPLETE CHAT HISTORY FOR THIS SESSION
+    // 🔟 Return full chat history
     // -------------------------------
     const historyQuery = `
       SELECT 
-        id,
-        file_id,
-        session_id,
-        question,
-        answer,
-        used_secret_prompt,
-        prompt_label,
-        secret_id,
-        used_chunk_ids,
-        created_at as timestamp
+        id, file_id, session_id, question, answer, used_secret_prompt,
+        prompt_label, secret_id, used_chunk_ids, created_at as timestamp
       FROM file_chats
       WHERE file_id = $1 AND session_id = $2 AND user_id = $3
-      ORDER BY created_at ASC
+      ORDER BY created_at ASC;
     `;
-
     const historyResult = await db.query(historyQuery, [fileId, finalSessionId, userId]);
-    
-    const history = historyResult.rows.map(row => ({
+
+    const history = historyResult.rows.map((row) => ({
       id: row.id,
       file_id: row.file_id,
       session_id: row.session_id,
@@ -1933,45 +2188,66 @@ const triggerSecretLLM = async (req, res) => {
       used_secret_prompt: row.used_secret_prompt,
       prompt_label: row.prompt_label,
       secret_id: row.secret_id,
-      used_chunk_ids: typeof row.used_chunk_ids === 'string'
-        ? JSON.parse(row.used_chunk_ids)
-        : row.used_chunk_ids,
+      used_chunk_ids: typeof row.used_chunk_ids === 'string' ? JSON.parse(row.used_chunk_ids) : row.used_chunk_ids,
       timestamp: row.timestamp,
-      display_text_left_panel: row.used_secret_prompt
-        ? `Analysis: ${row.prompt_label}`
-        : row.question
+      display_text_left_panel: row.used_secret_prompt ? `Analysis: ${row.prompt_label}` : row.question,
     }));
 
-    console.log(`[triggerSecretLLM] ✅ Fetched ${history.length} messages from chat history`);
+    console.log(`[triggerSecretLLM] ✅ Chat and job linked successfully.`);
 
-    // -------------------------------
-    // 🔟 Return success response with history
-    // -------------------------------
     return res.status(200).json({
       success: true,
-      answer: llmResponse,  // Keep 'answer' for compatibility
-      response: llmResponse,  // Keep 'response' for compatibility
+      answer: llmResponse,
+      response: llmResponse,
       message_id: messageId,
       session_id: finalSessionId,
       secretManagerId: secret_manager_id,
       llmProvider: provider,
       used_chunk_ids: chunkIds,
-      history: history,  // ✅ Return complete chat history
-      timestamp: createdAt
+      history,
+      timestamp: createdAt,
+      chunkingMethod: dbChunkingMethod,
     });
 
   } catch (err) {
     console.error('🚨 Error in triggerSecretLLM:', err);
     res.status(500).json({
       error: `Internal Server Error: ${err.message}`,
-      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
     });
   }
 };
+
+// Helper
+const getSecretDetailsById = async (secretId) => {
+  try {
+    const query = `
+      SELECT
+        s.id,
+        s.name,
+        s.secret_manager_id,
+        s.version,
+        s.llm_id,
+        l.name AS llm_name,
+        cm.method_name AS chunking_method
+      FROM secret_manager s
+      LEFT JOIN chunking_methods cm ON s.chunking_method_id = cm.id
+      LEFT JOIN llm_models l ON s.llm_id = l.id
+      WHERE s.id = $1
+    `;
+    const result = await db.query(query, [secretId]);
+    return result.rows[0];
+  } catch (error) {
+    console.error(`🚨 Error in getSecretDetailsById for secret ${secretId}:`, error.message);
+    throw error;
+  }
+};
+
 
 module.exports = {
   getAllSecrets,
   fetchSecretValueFromGCP,
   createSecretInGCP,
   triggerSecretLLM,
+  getSecretDetailsById, // Export the new helper function
 };

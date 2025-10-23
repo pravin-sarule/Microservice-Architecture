@@ -45,30 +45,15 @@ const uploadFileToGCS = (file, userId, folderPath = '') => {
   });
 };
 
-const checkStorageLimit = async (userId, newFileSize = 0) => {
+const checkStorageLimit = async (userId, newFileSize = 0, userPlan) => { // NEW: Add userPlan parameter
   console.log(`DEBUG: checkStorageLimit function entered for user ${userId}, newFileSize: ${newFileSize}`);
   try {
-    // Fetch user's active subscription and its storage_limit_gb
-    const userSubscriptionQuery = `
-      SELECT
-          sp.storage_limit_gb
-      FROM
-          user_subscriptions us
-      JOIN
-          subscription_plans sp ON us.plan_id = sp.id
-      WHERE
-          us.user_id = $1 AND us.status = 'active';
-    `;
-    console.log(`DEBUG: checkStorageLimit - Executing subscription query for user ${userId}`);
-    const result = await db.query(userSubscriptionQuery, [userId]);
-    console.log(`DEBUG: checkStorageLimit - Subscription query result rows: ${result.rows.length}`);
-
-    if (result.rows.length === 0) {
-      console.warn(`User ${userId} has no active subscription for storage limit check. Denying upload.`);
-      return false; // No active subscription, so no storage allowed
+    if (!userPlan || !userPlan.storage_limit_gb) {
+      console.warn(`User ${userId} has no active plan or storage_limit_gb defined. Denying upload.`);
+      return { allowed: false, message: "No active plan or storage limit defined." };
     }
 
-    const storageLimitGB = result.rows[0].storage_limit_gb;
+    const storageLimitGB = userPlan.storage_limit_gb;
     const storageLimitBytes = parseFloat(storageLimitGB) * 1024 * 1024 * 1024; // Convert GB to Bytes, ensure float parsing
     console.log(`DEBUG: checkStorageLimit - Plan storageLimitGB: ${storageLimitGB}, converted to Bytes: ${storageLimitBytes}`);
 
@@ -77,11 +62,15 @@ const checkStorageLimit = async (userId, newFileSize = 0) => {
 
     const isAllowed = (totalUsed + newFileSize) <= storageLimitBytes;
     console.log(`DEBUG: checkStorageLimit - Is allowed: ${isAllowed} (Total Used + New File Size: ${totalUsed + newFileSize} vs Limit: ${storageLimitBytes})`);
-    return isAllowed;
+    
+    if (!isAllowed) {
+      return { allowed: false, message: `Storage limit of ${storageLimitGB} GB exceeded.` };
+    }
+
+    return { allowed: true, message: "Storage limit check passed." };
   } catch (error) {
     console.error(`❌ Error in checkStorageLimit for user ${userId}:`, error);
-    // Re-throw or return false based on desired error handling
-    return false;
+    return { allowed: false, message: `Internal server error during storage check: ${error.message}` };
   }
 };
 

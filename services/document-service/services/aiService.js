@@ -2512,22 +2512,22 @@
 //   return retryWithBackoff(runHttpProvider);
 // }
 
-// // ---------------------------
-// // Gemini Wrappers
-// // ---------------------------
-// async function askGemini(context, question, modelType = 'gemini') {
-//   return askLLM(modelType, question, context);
-// }
+// ---------------------------
+// Gemini Wrappers
+// ---------------------------
+async function askGemini(context, question, modelType = 'gemini') {
+  return askLLM(modelType, question, context);
+}
 
-// async function analyzeWithGemini(documentText, modelType = 'gemini-pro-2.5') {
-//   const prompt = `Analyze this document thoroughly:\n\n${documentText}\n\nReturn key themes, summary, critical points, and recommendations.`;
-//   return askLLM(modelType, prompt, '');
-// }
+async function analyzeWithGemini(documentText, modelType = 'gemini-pro-2.5') {
+  const prompt = `Analyze this document thoroughly:\n\n${documentText}\n\nReturn key themes, summary, critical points, and recommendations.`;
+  return askLLM(modelType, prompt, '');
+}
 
-// async function getSummaryFromChunks(text, modelType = 'gemini-pro-2.5') {
-//   const prompt = `Summarize this text clearly and concisely:\n\n${text}`;
-//   return askLLM(modelType, prompt, '');
-// }
+async function getSummaryFromChunks(text, modelType = 'gemini-pro-2.5') {
+  const prompt = `Summarize this text clearly and concisely:\n\n${text}`;
+  return askLLM(modelType, prompt, '');
+}
 
 // // ---------------------------
 // // List available providers
@@ -2773,7 +2773,7 @@ async function askLLM(provider, userMessage, context = '') {
     console.log(`[askLLM] Calling ${provider} API...`);
     const response = await axios.post(config.apiUrl, requestBody, {
       headers: config.headers,
-      timeout: 60000,
+      timeout: 600000, // Increased timeout to 3 minutes for potentially longer LLM responses
     });
 
     const answer =
@@ -2815,6 +2815,9 @@ function getAvailableProviders() {
 
 module.exports = {
   askLLM,
+  askGemini,
+  analyzeWithGemini,
+  getSummaryFromChunks,
   getAvailableProviders,
   resolveProviderName,
 };

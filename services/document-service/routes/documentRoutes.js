@@ -15,6 +15,15 @@ const upload = multer({ storage: multer.memoryStorage() });
 // Document Routes
 // =========================
 
+// Single Document Upload & processing
+router.post(
+  "/upload",
+  protect,
+  checkDocumentUploadLimits,
+  upload.single("document"),
+  controller.uploadDocument
+);
+
 // Batch Upload & processing for large documents
 // router.post(
 //     '/batch-upload',
