@@ -92,7 +92,7 @@ const DocumentChatView = () => {
     return null;
   };
 
-  const API_BASE_URL = 'https://gateway-service-110685455967.asia-south1.run.app'; // Assuming this is consistent
+  const API_BASE_URL = 'http://localhost:5000'; // Assuming this is consistent
 
   const fetchSecrets = async () => {
     try {
