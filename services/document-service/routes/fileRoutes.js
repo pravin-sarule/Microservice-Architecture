@@ -11,10 +11,16 @@ const upload = multer({ storage: multer.memoryStorage() });
 // Create folder
 router.post("/create-folder", authMiddleware.protect, fileController.createFolder);
 router.post("/create", authMiddleware.protect, fileController.createCase);
+router.delete("/cases/:caseId", authMiddleware.protect, fileController.deleteCase);
+router.put("/cases/:caseId", authMiddleware.protect, fileController.updateCase);
+router.get("/cases/:caseId", authMiddleware.protect, fileController.getCase);
 
 
 // Get all folders for a user
 router.get("/folders", authMiddleware.protect, fileController.getFolders);
+
+// Get all cases for a user
+router.get("/cases", authMiddleware.protect, fileController.getAllCases);
 
 // Upload multiple docs to folder
 router.post("/:folderName/upload", authMiddleware.protect, checkDocumentUploadLimits, upload.array("files", 10), fileController.uploadDocuments);

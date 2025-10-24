@@ -25,8 +25,8 @@ const {
 const { getSignedUrl } = require("../services/folderService"); // Import from folderService
 const { checkStorageLimit } = require("../utils/storage");
 const { bucket } = require("../config/gcs");
-const { askGemini, getSummaryFromChunks } = require("../services/aiService");
-const { queryFolderWithGemini } = require("../services/folderAiService");
+const { askGemini, getSummaryFromChunks, askLLM, getAvailableProviders, resolveProviderName } = require("../services/aiService");
+const { askFolderLLM } = require("../services/folderAiService"); // Updated import
 const { extractText } = require("../utils/textExtractor");
 const {
   extractTextFromDocument,
@@ -38,6 +38,14 @@ const { chunkDocument } = require("../services/chunkingService");
 const { generateEmbedding, generateEmbeddings } = require("../services/embeddingService");
 const { fileInputBucket, fileOutputBucket } = require("../config/gcs");
 const TokenUsageService = require("../services/tokenUsageService"); // Import TokenUsageService
+const { SecretManagerServiceClient } = require('@google-cloud/secret-manager'); // NEW
+const secretManagerController = require('./secretManagerController'); // NEW
+const GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID; // NEW
+let secretClient; // NEW
+
+if (!secretClient) { // NEW
+  secretClient = new SecretManagerServiceClient(); // NEW
+} // NEW
 
 /* ----------------- Helpers ----------------- */
 function sanitizeName(name) {
@@ -76,7 +84,7 @@ async function makeSignedReadUrl(objectKey, minutes = 15) {
 }
 
 /* ----------------- Process Document ----------------- */
-async function processDocumentWithAI(fileId, fileBuffer, mimetype, userId, originalFilename) {
+async function processDocumentWithAI(fileId, fileBuffer, mimetype, userId, originalFilename, secretId = null) {
   const jobId = uuidv4();
 
   try {
@@ -86,6 +94,7 @@ async function processDocumentWithAI(fileId, fileBuffer, mimetype, userId, origi
       type: "batch",
       document_ai_operation_name: null,
       status: "queued",
+      secret_id: secretId, // Pass secretId to the job
     });
 
     await File.updateProcessingStatus(fileId, "batch_queued", 0);
@@ -740,6 +749,249 @@ exports.createCase = async (req, res) => {
   }
 };
 
+/* ---------------------- Delete Case ---------------------- */
+exports.deleteCase = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const userId = parseInt(req.user?.id);
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized user" });
+    }
+
+    const { caseId } = req.params;
+    if (!caseId) {
+      return res.status(400).json({ error: "Case ID is required." });
+    }
+
+    await client.query("BEGIN");
+
+    // 1. Get the case to find its associated folder_id
+    const getCaseQuery = `SELECT folder_id FROM cases WHERE id = $1::uuid AND user_id = $2;`;
+    const { rows: caseRows } = await client.query(getCaseQuery, [caseId, userId]);
+
+    if (caseRows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Case not found or not authorized." });
+    }
+
+    const folderId = caseRows[0].folder_id;
+
+    // 2. Delete the case record
+    const deleteCaseQuery = `DELETE FROM cases WHERE id = $1::uuid AND user_id = $2 RETURNING *;`;
+    const { rows: deletedCaseRows } = await client.query(deleteCaseQuery, [caseId, userId]);
+
+    if (deletedCaseRows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Case not found or not authorized." });
+    }
+
+    // 3. Delete the associated folder from user_files
+    if (folderId) {
+      // First, get the gcs_path of the folder to delete its contents from GCS
+      const getFolderQuery = `SELECT gcs_path FROM user_files WHERE id = $1::uuid AND user_id = $2 AND is_folder = TRUE;`;
+      const { rows: folderRows } = await client.query(getFolderQuery, [folderId, userId]);
+
+      if (folderRows.length > 0) {
+        const gcsPath = folderRows[0].gcs_path;
+        // Delete all files within the GCS folder (including the .keep file)
+        await bucket.deleteFiles({
+          prefix: gcsPath,
+        });
+        console.log(`🗑️ Deleted GCS objects with prefix: ${gcsPath}`);
+      }
+
+      // Now delete the folder record itself from user_files
+      await File.delete(folderId);
+      console.log(`🗑️ Deleted folder record with ID: ${folderId}`);
+    }
+
+    await client.query("COMMIT");
+
+    return res.status(200).json({
+      message: "Case and associated folder deleted successfully.",
+      deletedCase: deletedCaseRows[0],
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error deleting case:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      details: error.message,
+    });
+  } finally {
+    client.release();
+  }
+};
+
+/* ---------------------- Update Case ---------------------- */
+exports.updateCase = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const userId = parseInt(req.user?.id);
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized user" });
+    }
+
+    const { caseId } = req.params;
+    if (!caseId) {
+      return res.status(400).json({ error: "Case ID is required." });
+    }
+
+    const {
+      case_title,
+      case_number,
+      filing_date,
+      case_type,
+      sub_type,
+      court_name,
+      court_level,
+      bench_division,
+      jurisdiction,
+      state,
+      judges,
+      court_room_no,
+      petitioners,
+      respondents,
+      category_type,
+      primary_category,
+      sub_category,
+      complexity,
+      monetary_value,
+      priority_level,
+      status, // Allow updating status (e.g., 'Active', 'Inactive', 'Closed')
+    } = req.body;
+
+    const updates = {};
+    if (case_title !== undefined) updates.case_title = case_title;
+    if (case_number !== undefined) updates.case_number = case_number;
+    if (filing_date !== undefined) updates.filing_date = filing_date;
+    if (case_type !== undefined) updates.case_type = case_type;
+    if (sub_type !== undefined) updates.sub_type = sub_type;
+    if (court_name !== undefined) updates.court_name = court_name;
+    if (court_level !== undefined) updates.court_level = court_level;
+    if (bench_division !== undefined) updates.bench_division = bench_division;
+    if (jurisdiction !== undefined) updates.jurisdiction = jurisdiction;
+    if (state !== undefined) updates.state = state;
+    if (judges !== undefined) updates.judges = judges ? JSON.stringify(judges) : null;
+    if (court_room_no !== undefined) updates.court_room_no = court_room_no;
+    if (petitioners !== undefined) updates.petitioners = petitioners ? JSON.stringify(petitioners) : null;
+    if (respondents !== undefined) updates.respondents = respondents ? JSON.stringify(respondents) : null;
+    if (category_type !== undefined) updates.category_type = category_type;
+    if (primary_category !== undefined) updates.primary_category = primary_category;
+    if (sub_category !== undefined) updates.sub_category = sub_category;
+    if (complexity !== undefined) updates.complexity = complexity;
+    if (monetary_value !== undefined) updates.monetary_value = monetary_value;
+    if (priority_level !== undefined) updates.priority_level = priority_level;
+    if (status !== undefined) updates.status = status; // Update case status
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: "No update fields provided." });
+    }
+
+    const fields = Object.keys(updates).map((key, index) => `${key} = $${index + 3}`).join(', ');
+    const values = Object.values(updates);
+
+    const updateQuery = `
+      UPDATE cases
+      SET ${fields}, updated_at = NOW()
+      WHERE id = $1::uuid AND user_id = $2
+      RETURNING *;
+    `;
+
+    const { rows: updatedCaseRows } = await client.query(updateQuery, [caseId, userId, ...values]);
+
+    if (updatedCaseRows.length === 0) {
+      return res.status(404).json({ error: "Case not found or not authorized." });
+    }
+
+    await client.query("COMMIT");
+
+    return res.status(200).json({
+      message: "Case updated successfully.",
+      case: updatedCaseRows[0],
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error updating case:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      details: error.message,
+    });
+  } finally {
+    client.release();
+  }
+};
+
+/* ---------------------- Get Case by ID ---------------------- */
+exports.getCase = async (req, res) => {
+  try {
+    const userId = parseInt(req.user?.id);
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized user" });
+    }
+
+    const { caseId } = req.params;
+    if (!caseId) {
+      return res.status(400).json({ error: "Case ID is required." });
+    }
+
+    const getCaseQuery = `
+      SELECT * FROM cases
+      WHERE id = $1::uuid AND user_id = $2;
+    `;
+    const { rows: caseRows } = await pool.query(getCaseQuery, [caseId, userId]);
+
+    if (caseRows.length === 0) {
+      return res.status(404).json({ error: "Case not found or not authorized." });
+    }
+
+    const caseData = caseRows[0];
+
+    // Parse JSON fields back to objects/arrays with error handling
+    try {
+      if (typeof caseData.judges === 'string' && caseData.judges.trim() !== '') {
+        caseData.judges = JSON.parse(caseData.judges);
+      } else if (caseData.judges === null) {
+        caseData.judges = [];
+      }
+    } catch (e) {
+      console.warn(`⚠️ Could not parse judges JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.judges}`);
+      caseData.judges = [];
+    }
+    try {
+      if (typeof caseData.petitioners === 'string' && caseData.petitioners.trim() !== '') {
+        caseData.petitioners = JSON.parse(caseData.petitioners);
+      } else if (caseData.petitioners === null) {
+        caseData.petitioners = [];
+      }
+    } catch (e) {
+      console.warn(`⚠️ Could not parse petitioners JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.petitioners}`);
+      caseData.petitioners = [];
+    }
+    try {
+      if (typeof caseData.respondents === 'string' && caseData.respondents.trim() !== '') {
+        caseData.respondents = JSON.parse(caseData.respondents);
+      } else if (caseData.respondents === null) {
+        caseData.respondents = [];
+      }
+    } catch (e) {
+      console.warn(`⚠️ Could not parse respondents JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.respondents}`);
+      caseData.respondents = [];
+    }
+
+    return res.status(200).json({
+      message: "Case fetched successfully.",
+      case: caseData,
+    });
+  } catch (error) {
+    console.error("❌ Error fetching case:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      details: error.message,
+    });
+  }
+};
+
 exports .getFolders = async (req, res) => {
   try {
     const userId = req.user.id;
@@ -806,6 +1058,7 @@ exports.uploadDocuments = async (req, res) => {
 
   try {
     const { folderName } = req.params;
+    const { secret_id } = req.body; // NEW: Get secret_id from request body
 
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: "No files uploaded" });
@@ -872,7 +1125,7 @@ exports.uploadDocuments = async (req, res) => {
       // 3. Increment usage after successful upload and metadata save
       await TokenUsageService.incrementUsage(userId, requestedResources);
 
-      processDocumentWithAI(savedFile.id, file.buffer, file.mimetype, userId, safeName).catch((err) =>
+      processDocumentWithAI(savedFile.id, file.buffer, file.mimetype, userId, safeName, secret_id).catch((err) =>
         console.error(`❌ Background processing failed for ${savedFile.id}:`, err.message)
       );
 
@@ -990,27 +1243,29 @@ exports.queryFolderDocuments = async (req, res) => {
     const { folderName } = req.params;
 
     const {
-      question,                    // This is the FULL prompt text (for AI processing)
-      used_secret_prompt = false,  // Boolean flag
-      prompt_label = null,         // This is the SHORT label (for display)
+      question, // For custom queries
+      used_secret_prompt = false, // Boolean flag
+      prompt_label = null, // This is the SHORT label (for display)
       session_id = null,
       maxResults = 10,
+      secret_id, // NEW: For secret prompts
+      llm_name, // NEW: Optional LLM override
+      additional_input = '', // NEW: Additional input for secret prompts
     } = req.body;
 
     userId = req.user.id;
 
     // Validation
-    if (!folderName || !question) {
-      console.error("❌ Chat Error: folderName or question missing.");
-      return res
-        .status(400)
-        .json({ error: "folderName and question are required." });
+    if (!folderName) {
+      console.error("❌ Chat Error: folderName missing.");
+      return res.status(400).json({ error: "folderName is required." });
     }
 
+    // Generate session ID if not provided
+    const finalSessionId = session_id || `session-${Date.now()}`;
+
     console.log(`[chatWithFolder] Processing query for folder: ${folderName}, user: ${userId}`);
-    console.log(`[chatWithFolder] Question length: ${question.length}`);
-    console.log(`[chatWithFolder] Used secret prompt: ${used_secret_prompt}`);
-    console.log(`[chatWithFolder] Prompt label: ${prompt_label}`);
+    console.log(`[chatWithFolder] Used secret prompt: ${used_secret_prompt}, secret_id: ${secret_id}, llm_name: ${llm_name}`);
 
     // 1. Fetch user's usage and plan details
     const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
@@ -1044,61 +1299,136 @@ exports.queryFolderDocuments = async (req, res) => {
       });
     }
 
-    // Token cost (rough estimate)
-    chatCost = Math.ceil(question.length / 100) + Math.ceil(allChunks.reduce((sum, c) => sum + c.content.length, 0) / 200); // Question tokens + context tokens
-    
-    // 2. Enforce token limits for AI analysis
-    const requestedResources = { tokens: chatCost, ai_analysis: 1 };
-    const { allowed, message } = await TokenUsageService.enforceLimits(usage, plan, requestedResources);
-
-    if (!allowed) {
-      return res.status(403).json({
-        error: `AI chat failed: ${message}`,
-        timeLeftUntilReset: timeLeft
-      });
-    }
-
-    // Find context using the FULL question (even if it's a secret prompt)
-    const questionEmbedding = await generateEmbedding(question);
-    const relevantChunks = await ChunkVector.findNearestChunksAcrossFiles(
-      questionEmbedding,
-      maxResults,
-      processedFiles.map(f => f.id)
-    );
-
-    const relevantChunkContents = relevantChunks.map((chunk) => chunk.content);
-    const usedChunkIds = relevantChunks.map((chunk) => chunk.chunk_id);
-
-    // Generate AI answer using the FULL question
     let answer;
-    if (relevantChunkContents.length === 0) {
-      answer = await askGemini(
-        "No relevant context found in the folder documents.",
-        question  // Use full question for AI
+    let usedChunkIds = [];
+    let storedQuestion;
+    let finalPromptLabel = prompt_label;
+    let provider;
+
+    // ================================
+    // CASE 1: SECRET PROMPT HANDLING
+    // ================================
+    if (used_secret_prompt) {
+      if (!secret_id) {
+        return res.status(400).json({ error: "secret_id is required for secret prompts." });
+      }
+
+      console.log(`[chatWithFolder] Handling secret prompt: ${secret_id}`);
+
+      // Fetch secret configuration from DB
+      const secretDetails = await secretManagerController.getSecretDetailsById(secret_id);
+
+      if (!secretDetails) {
+        return res.status(404).json({ error: "Secret configuration not found." });
+      }
+
+      const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } = secretDetails;
+      finalPromptLabel = secretName;
+
+      // Resolve LLM provider (prioritize request llm_name, then DB, then default)
+      provider = resolveProviderName(llm_name || dbLlmName || 'gemini');
+      console.log(`[chatWithFolder] Using LLM provider: ${provider}`);
+
+      // Fetch secret value from GCP Secret Manager
+      const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
+      const [accessResponse] = await secretClient.accessSecretVersion({ name: gcpSecretName });
+      const secretValue = accessResponse.payload.data.toString('utf8');
+
+      if (!secretValue?.trim()) {
+        return res.status(500).json({ error: "Secret value is empty." });
+      }
+
+      const documentContent = allChunks.map(c => c.content).join('\n\n');
+
+      // Construct final prompt
+      let finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n`;
+      finalPrompt += `${secretValue}\n\n=== DOCUMENTS TO ANALYZE IN FOLDER "${folderName}" ===\n${documentContent}`;
+
+      if (additional_input?.trim()) {
+        finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additional_input.trim()}`;
+      }
+
+      console.log(`[chatWithFolder] Secret prompt length: ${finalPrompt.length}`);
+
+      // Call LLM with selected provider
+      answer = await askLLM(provider, finalPrompt);
+
+      storedQuestion = secretName; // Store secret name as question
+      usedChunkIds = allChunks.map(c => c.id); // All chunks are "used" for folder-wide secret prompts
+
+    }
+    // ================================
+    // CASE 2: CUSTOM QUERY HANDLING
+    // ================================
+    else {
+      if (!question?.trim()) {
+        return res.status(400).json({ error: "question is required for custom queries." });
+      }
+
+      console.log(`[chatWithFolder] Handling custom query: "${question.substring(0, 50)}..."`);
+
+      // For custom queries, always use 'gemini' as the provider.
+      provider = 'gemini';
+      console.log(`[chatWithFolder] Custom query using fixed provider: ${provider}`);
+
+      // Token cost (rough estimate)
+      chatCost = Math.ceil(question.length / 100) + Math.ceil(allChunks.reduce((sum, c) => sum + c.content.length, 0) / 200);
+
+      // 2. Enforce token limits for AI analysis
+      const requestedResources = { tokens: chatCost, ai_analysis: 1 };
+      const { allowed, message } = await TokenUsageService.enforceLimits(usage, plan, requestedResources);
+
+      if (!allowed) {
+        return res.status(403).json({
+          error: `AI chat failed: ${message}`,
+          timeLeftUntilReset: timeLeft
+        });
+      }
+
+      // Use vector search for relevant context
+      const questionEmbedding = await generateEmbedding(question);
+      const relevantChunks = await ChunkVector.findNearestChunksAcrossFiles(
+        questionEmbedding,
+        maxResults,
+        processedFiles.map(f => f.id)
       );
-    } else {
-      const context = relevantChunkContents.join("\n\n");
-      answer = await askGemini(context, question);  // Use full question for AI
+
+      const relevantChunkContents = relevantChunks.map((chunk) => chunk.content);
+      usedChunkIds = relevantChunks.map((chunk) => chunk.chunk_id);
+
+      if (relevantChunkContents.length === 0) {
+        console.log(`[chatWithFolder] No relevant chunks, using full document`);
+        const documentFullText = allChunks.map(c => c.content).join("\n\n");
+        answer = await askFolderLLM(provider, question, documentFullText); // Use askFolderLLM
+      } else {
+        const context = relevantChunkContents.join("\n\n");
+        console.log(`[chatWithFolder] Using ${relevantChunkContents.length} relevant chunks`);
+        answer = await askFolderLLM(provider, question, context); // Use askFolderLLM
+      }
+
+      storedQuestion = question; // Store actual question
     }
 
-    // Determine what to store in the database:
-    // - If secret prompt: store the SHORT label
-    // - If regular question: store the full question
-    const questionToStore = used_secret_prompt ? prompt_label : question;
-    
-    console.log(`[chatWithFolder] Storing in DB: "${questionToStore}"`);
+    if (!answer?.trim()) {
+      return res.status(500).json({ error: "Empty response from AI." });
+    }
+
+    console.log(`[chatWithFolder] Answer length: ${answer.length} characters`);
 
     const savedChat = await FolderChat.saveFolderChat(
       userId,
       folderName,
-      questionToStore,              // Store ONLY the label if secret prompt
+      storedQuestion,
       answer,
-      session_id,
-      processedFiles.map(f => f.id)
+      finalSessionId,
+      processedFiles.map(f => f.id), // summarized_file_ids
+      used_secret_prompt,
+      finalPromptLabel,
+      secret_id // Pass secret_id to saveChat
     );
 
     // 3. Increment usage after successful AI chat
-    await TokenUsageService.incrementUsage(userId, requestedResources);
+    await TokenUsageService.incrementUsage(userId, { tokens: chatCost, ai_analysis: 1 }); // Use calculated chatCost
 
     // Fetch full session history
     const history = await FolderChat.getFolderChatHistory(
@@ -1110,15 +1440,16 @@ exports.queryFolderDocuments = async (req, res) => {
     // Map history to ensure proper field names for frontend
     const mappedHistory = history.map(chat => ({
       id: chat.id,
-      question: chat.question,              // This will be the label if secret prompt
-      displayQuestion: chat.used_secret_prompt ? chat.prompt_label : chat.question,
-      response: chat.answer,                // Add 'response' field
-      answer: chat.answer,                  // Keep 'answer' field
-      message: chat.answer,                 // Add 'message' field for fallback
+      question: chat.question,
+      displayQuestion: chat.used_secret_prompt ? `Analysis: ${chat.prompt_label || 'Secret Prompt'}` : chat.question,
+      response: chat.answer,
+      answer: chat.answer,
+      message: chat.answer,
       timestamp: chat.created_at,
       session_id: chat.session_id,
       used_secret_prompt: chat.used_secret_prompt,
       prompt_label: chat.prompt_label,
+      secret_id: chat.secret_id, // Include secret_id
       used_chunk_ids: chat.used_chunk_ids,
       summarized_file_ids: chat.summarized_file_ids
     }));
@@ -1126,18 +1457,22 @@ exports.queryFolderDocuments = async (req, res) => {
     console.log(`[chatWithFolder] ✅ Response prepared with ${mappedHistory.length} messages`);
 
     return res.json({
-      sessionId: savedChat.session_id,      // Use camelCase
-      session_id: savedChat.session_id,     // Also keep snake_case for compatibility
-      answer,                                // Latest answer
-      response: answer,                      // Also as 'response'
-      chatHistory: mappedHistory,            // Use camelCase
-      history: mappedHistory                 // Also keep 'history' for compatibility
+      success: true,
+      sessionId: finalSessionId,
+      session_id: finalSessionId,
+      answer,
+      response: answer,
+      chatHistory: mappedHistory,
+      history: mappedHistory,
+      used_chunk_ids: usedChunkIds,
+      llm_provider: provider,
+      used_secret_prompt: used_secret_prompt,
+      prompt_label: finalPromptLabel,
+      secret_id: secret_id,
     });
 
   } catch (error) {
     console.error("❌ Error chatting with folder:", error);
-    // If an error occurs after token check but before increment, we should ideally roll back.
-    // For now, we'll just log the error.
     return res
       .status(500)
       .json({ error: "Failed to get AI answer.", details: error.message });
@@ -1280,7 +1615,32 @@ exports.getFileProcessingStatus = async (req, res) => {
 
     await File.updateProcessingStatus(file_id, "processing", 75.0);
 
-    const chunks = await chunkDocument(extractedBatchTexts, file_id);
+    // Dynamically determine chunking method from secret_manager → chunking_methods
+    let batchChunkingMethod = "recursive"; // Default fallback
+    try {
+      const chunkMethodQuery = `
+        SELECT cm.method_name
+        FROM processing_jobs pj
+        LEFT JOIN secret_manager sm ON pj.secret_id = sm.id
+        LEFT JOIN chunking_methods cm ON sm.chunking_method_id = cm.id
+        WHERE pj.file_id = $1
+        ORDER BY pj.created_at DESC
+        LIMIT 1;
+      `;
+      const result = await pool.query(chunkMethodQuery, [file_id]);
+
+      if (result.rows.length > 0) {
+        batchChunkingMethod = result.rows[0].method_name;
+        console.log(`[getFileProcessingStatus] ✅ Using chunking method from DB: ${batchChunkingMethod}`);
+      } else {
+        console.log(`[getFileProcessingStatus] No secret_id found for file ${file_id}, using default chunking method.`);
+      }
+    } catch (err) {
+      console.error(`[getFileProcessingStatus] Error fetching chunking method: ${err.message}`);
+      console.log(`[getFileProcessingStatus] Falling back to default chunking method: recursive`);
+    }
+
+    const chunks = await chunkDocument(extractedBatchTexts, file_id, batchChunkingMethod);
 
     if (chunks.length === 0) {
       await File.updateProcessingStatus(file_id, "processed", 100.0);
@@ -1290,6 +1650,7 @@ exports.getFileProcessingStatus = async (req, res) => {
         file_id: updatedFile.id,
         chunks: [],
         summary: updatedFile.summary,
+        chunking_method: batchChunkingMethod,
       });
     }
 
@@ -1354,6 +1715,7 @@ exports.getFileProcessingStatus = async (req, res) => {
       last_updated: updatedFile.updated_at,
       chunks: formattedChunks,
       summary: updatedFile.summary,
+      chunking_method: batchChunkingMethod,
     });
   } catch (error) {
     console.error("❌ getFileProcessingStatus error:", error);
@@ -1528,14 +1890,23 @@ exports.continueFolderChat = async (req, res) => {
 
   try {
     const { folderName, sessionId } = req.params;
-    const { question, maxResults = 10 } = req.body;
+    const {
+      question, // For custom queries
+      maxResults = 10,
+      used_secret_prompt = false, // NEW
+      prompt_label = null, // NEW
+      secret_id, // NEW
+      llm_name, // NEW
+      additional_input = '', // NEW
+    } = req.body;
 
-    if (!question) {
-      return res.status(400).json({ error: "Question is required" });
+    if (!folderName) {
+      return res.status(400).json({ error: "folderName is required." });
     }
 
     console.log(`[continueFolderChat] Continuing session ${sessionId} for folder: ${folderName}`);
     console.log(`[continueFolderChat] New question: ${question}`);
+    console.log(`[continueFolderChat] Used secret prompt: ${used_secret_prompt}, secret_id: ${secret_id}, llm_name: ${llm_name}`);
 
     // 1. Fetch user's usage and plan details
     const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
@@ -1720,7 +2091,7 @@ INSTRUCTIONS:
  
 Provide your answer:`;
  
-    const answer = await queryFolderWithGemini(prompt);
+    const answer = await askFolderLLM(provider, question, contextText, existingChats.map(chat => ({ question: chat.question, answer: chat.answer }))); // Use askFolderLLM
     console.log(`[continueFolderChat] Generated answer length: ${answer.length} characters`);
 
     // Save the new chat message
@@ -1840,6 +2211,70 @@ exports.getFolderChatsByFolder = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch chats for folder",
+    });
+  }
+};
+
+/* ---------------------- Get All Cases for User ---------------------- */
+exports.getAllCases = async (req, res) => {
+  try {
+    const userId = parseInt(req.user?.id);
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized user" });
+    }
+
+    const getAllCasesQuery = `
+      SELECT * FROM cases
+      WHERE user_id = $1
+      ORDER BY created_at DESC;
+    `;
+    const { rows: cases } = await pool.query(getAllCasesQuery, [userId]);
+
+    // Parse JSON fields for each case
+    const formattedCases = cases.map(caseData => {
+      try {
+        if (typeof caseData.judges === 'string' && caseData.judges.trim() !== '') {
+          caseData.judges = JSON.parse(caseData.judges);
+        } else if (caseData.judges === null) {
+          caseData.judges = []; // Default to empty array if null
+        }
+      } catch (e) {
+        console.warn(`⚠️ Could not parse judges JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.judges}`);
+        caseData.judges = []; // Fallback to empty array on error
+      }
+      try {
+        if (typeof caseData.petitioners === 'string' && caseData.petitioners.trim() !== '') {
+          caseData.petitioners = JSON.parse(caseData.petitioners);
+        } else if (caseData.petitioners === null) {
+          caseData.petitioners = []; // Default to empty array if null
+        }
+      } catch (e) {
+        console.warn(`⚠️ Could not parse petitioners JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.petitioners}`);
+        caseData.petitioners = []; // Fallback to empty array on error
+      }
+      try {
+        if (typeof caseData.respondents === 'string' && caseData.respondents.trim() !== '') {
+          caseData.respondents = JSON.parse(caseData.respondents);
+        } else if (caseData.respondents === null) {
+          caseData.respondents = []; // Default to empty array if null
+        }
+      } catch (e) {
+        console.warn(`⚠️ Could not parse respondents JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.respondents}`);
+        caseData.respondents = []; // Fallback to empty array on error
+      }
+      return caseData;
+    });
+
+    return res.status(200).json({
+      message: "Cases fetched successfully.",
+      cases: formattedCases,
+      totalCases: formattedCases.length,
+    });
+  } catch (error) {
+    console.error("❌ Error fetching all cases:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      details: error.message,
     });
   }
 };
