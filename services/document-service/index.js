@@ -78,7 +78,6 @@ app.use(cookieParser());
 app.use(express.json());
 app.use(morgan('dev'));
 
-// ✅ Properly configured CORS
 const allowedOrigins = [
   'http://localhost:5173',
   'https://nexintelagent.netlify.app',
