@@ -627,11 +627,134 @@ async function createFolderInternal(userId, folderName, parentPath = "") {
 //     client.release();
 //   }
 // };
+// exports.createCase = async (req, res) => {
+//   const client = await pool.connect();
+
+//   try {
+//     const userId = parseInt(req.user?.id); // Ensure integer
+//     if (!userId) {
+//       return res.status(401).json({ error: "Unauthorized user" });
+//     }
+
+//     const {
+//       case_title,
+//       case_number,
+//       filing_date,
+//       case_type,
+//       sub_type,
+//       court_name,
+//       court_level,
+//       bench_division,
+//       jurisdiction,
+//       state,
+//       judges,
+//       court_room_no,
+//       petitioners,
+//       respondents,
+//       category_type,
+//       primary_category,
+//       sub_category,
+//       complexity,
+//       monetary_value,
+//       priority_level,
+//       status = "Active",
+//     } = req.body;
+
+//     if (!case_title || !case_type || !court_name) {
+//       return res.status(400).json({
+//         error: "Missing required fields: case_title, case_type, court_name",
+//       });
+//     }
+
+//     await client.query("BEGIN");
+
+//     const insertQuery = `
+//       INSERT INTO cases (
+//         user_id, case_title, case_number, filing_date, case_type, sub_type,
+//         court_name, court_level, bench_division, jurisdiction, state, judges,
+//         court_room_no, petitioners, respondents, category_type, primary_category,
+//         sub_category, complexity, monetary_value, priority_level, status
+//       )
+//       VALUES (
+//         $1, $2, $3, $4, $5, $6,
+//         $7, $8, $9, $10, $11, $12,
+//         $13, $14, $15, $16, $17,
+//         $18, $19, $20, $21, $22
+//       )
+//       RETURNING *;
+//     `;
+
+//     const values = [
+//       userId,
+//       case_title,
+//       case_number,
+//       filing_date,
+//       case_type,
+//       sub_type,
+//       court_name,
+//       court_level,
+//       bench_division,
+//       jurisdiction,
+//       state,
+//       judges ? JSON.stringify(judges) : null,
+//       court_room_no,
+//       petitioners ? JSON.stringify(petitioners) : null,
+//       respondents ? JSON.stringify(respondents) : null,
+//       category_type,
+//       primary_category,
+//       sub_category,
+//       complexity,
+//       monetary_value,
+//       priority_level,
+//       status,
+//     ];
+
+//     const { rows: caseRows } = await client.query(insertQuery, values);
+//     const newCase = caseRows[0];
+
+//     // Create folder for the case
+//     const safeCaseName = sanitizeName(case_title);
+//     const parentPath = `${userId}/cases`;
+//     const folder = await createFolderInternal(userId, safeCaseName, parentPath);
+
+//     // Link folder to case
+//     const updateQuery = `
+//       UPDATE cases
+//       SET folder_id = $1
+//       WHERE id = $2
+//       RETURNING *;
+//     `;
+//     const { rows: updatedRows } = await client.query(updateQuery, [
+//       folder.id,
+//       newCase.id,
+//     ]);
+//     const updatedCase = updatedRows[0];
+
+//     await client.query("COMMIT");
+
+//     return res.status(201).json({
+//       message: "Case created successfully with folder",
+//       case: updatedCase,
+//       folder,
+//     });
+//   } catch (error) {
+//     await client.query("ROLLBACK");
+//     console.error("❌ Error creating case:", error);
+//     res.status(500).json({
+//       error: "Internal server error",
+//       details: error.message,
+//     });
+//   } finally {
+//     client.release();
+//   }
+// };
+
+
 exports.createCase = async (req, res) => {
   const client = await pool.connect();
 
   try {
-    const userId = parseInt(req.user?.id); // Ensure integer
+    const userId = parseInt(req.user?.id);
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized user" });
     }
@@ -668,6 +791,7 @@ exports.createCase = async (req, res) => {
 
     await client.query("BEGIN");
 
+    // Insert case
     const insertQuery = `
       INSERT INTO cases (
         user_id, case_title, case_number, filing_date, case_type, sub_type,
@@ -737,6 +861,7 @@ exports.createCase = async (req, res) => {
       case: updatedCase,
       folder,
     });
+
   } catch (error) {
     await client.query("ROLLBACK");
     console.error("❌ Error creating case:", error);
@@ -766,7 +891,7 @@ exports.deleteCase = async (req, res) => {
     await client.query("BEGIN");
 
     // 1. Get the case to find its associated folder_id
-    const getCaseQuery = `SELECT folder_id FROM cases WHERE id = $1::uuid AND user_id = $2;`;
+    const getCaseQuery = `SELECT folder_id FROM cases WHERE id = $1 AND user_id = $2;`;
     const { rows: caseRows } = await client.query(getCaseQuery, [caseId, userId]);
 
     if (caseRows.length === 0) {
@@ -777,7 +902,7 @@ exports.deleteCase = async (req, res) => {
     const folderId = caseRows[0].folder_id;
 
     // 2. Delete the case record
-    const deleteCaseQuery = `DELETE FROM cases WHERE id = $1::uuid AND user_id = $2 RETURNING *;`;
+    const deleteCaseQuery = `DELETE FROM cases WHERE id = $1 AND user_id = $2 RETURNING *;`;
     const { rows: deletedCaseRows } = await client.query(deleteCaseQuery, [caseId, userId]);
 
     if (deletedCaseRows.length === 0) {
@@ -894,7 +1019,7 @@ exports.updateCase = async (req, res) => {
     const updateQuery = `
       UPDATE cases
       SET ${fields}, updated_at = NOW()
-      WHERE id = $1::uuid AND user_id = $2
+      WHERE id = $1 AND user_id = $2
       RETURNING *;
     `;
 
@@ -923,74 +1048,240 @@ exports.updateCase = async (req, res) => {
 };
 
 /* ---------------------- Get Case by ID ---------------------- */
+// exports.getCase = async (req, res) => {
+//   try {
+//     const userId = parseInt(req.user?.id);
+//     if (!userId) {
+//       return res.status(401).json({ error: "Unauthorized user" });
+//     }
+
+//     const { caseId } = req.params;
+//     if (!caseId) {
+//       return res.status(400).json({ error: "Case ID is required." });
+//     }
+
+//     const getCaseQuery = `
+//       SELECT * FROM cases
+//       WHERE id = $1 AND user_id = $2;
+//     `;
+//     const { rows: caseRows } = await pool.query(getCaseQuery, [caseId, userId]);
+
+//     if (caseRows.length === 0) {
+//       return res.status(404).json({ error: "Case not found or not authorized." });
+//     }
+
+//     const caseData = caseRows[0];
+
+//     // Parse JSON fields back to objects/arrays with error handling
+//     try {
+//       if (typeof caseData.judges === 'string' && caseData.judges.trim() !== '') {
+//         caseData.judges = JSON.parse(caseData.judges);
+//       } else if (caseData.judges === null) {
+//         caseData.judges = [];
+//       }
+//     } catch (e) {
+//       console.warn(`⚠️ Could not parse judges JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.judges}`);
+//       caseData.judges = [];
+//     }
+//     try {
+//       if (typeof caseData.petitioners === 'string' && caseData.petitioners.trim() !== '') {
+//         caseData.petitioners = JSON.parse(caseData.petitioners);
+//       } else if (caseData.petitioners === null) {
+//         caseData.petitioners = [];
+//       }
+//     } catch (e) {
+//       console.warn(`⚠️ Could not parse petitioners JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.petitioners}`);
+//       caseData.petitioners = [];
+//     }
+//     try {
+//       if (typeof caseData.respondents === 'string' && caseData.respondents.trim() !== '') {
+//         caseData.respondents = JSON.parse(caseData.respondents);
+//       } else if (caseData.respondents === null) {
+//         caseData.respondents = [];
+//       }
+//     } catch (e) {
+//       console.warn(`⚠️ Could not parse respondents JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.respondents}`);
+//       caseData.respondents = [];
+//     }
+
+//     return res.status(200).json({
+//       message: "Case fetched successfully.",
+//       case: caseData,
+//     });
+//   } catch (error) {
+//     console.error("❌ Error fetching case:", error);
+//     res.status(500).json({
+//       error: "Internal server error",
+//       details: error.message,
+//     });
+//   }
+// };
+
+// exports.getCase = async (req, res) => {
+//   try {
+//     const userId = req.user?.id;
+//     const { caseId } = req.params;
+
+//     if (!userId) {
+//       return res.status(401).json({ error: "Unauthorized user" });
+//     }
+//     if (!caseId) {
+//       return res.status(400).json({ error: "Case ID is required." });
+//     }
+
+//     // --- Fetch case details ---
+//     const caseQuery = `
+//       SELECT * FROM cases
+//       WHERE id = $1 AND user_id = $2;
+//     `;
+//     const { rows: caseRows } = await pool.query(caseQuery, [caseId, userId]);
+
+//     if (caseRows.length === 0) {
+//       return res.status(404).json({ error: "Case not found or not authorized." });
+//     }
+//     const caseData = caseRows[0];
+
+//     // --- Fetch all files/folders under this case from user_files ---
+//     // Assuming folder_path contains something like: batch-uploads/<userId>/<caseUUID>/
+//     const filesQuery = `
+//       SELECT *
+//       FROM user_files
+//       WHERE user_id = $1
+//         AND folder_path LIKE $2
+//       ORDER BY created_at DESC;
+//     `;
+
+//     const folderPrefix = `%${caseId}%`; // Example: match folder paths containing the caseId
+//     const { rows: userFiles } = await pool.query(filesQuery, [userId, folderPrefix]);
+
+//     // --- Separate folders and files ---
+//     const folders = userFiles
+//       .filter(file => file.is_folder)
+//       .map(folder => ({
+//         id: folder.id,
+//         name: folder.originalname,
+//         folder_path: folder.folder_path,
+//         created_at: folder.created_at,
+//         updated_at: folder.updated_at,
+//         children: [],
+//       }));
+
+//     const actualFiles = userFiles.filter(file => !file.is_folder);
+
+//     // --- Generate signed URLs for each file ---
+//     const signedFiles = await Promise.all(
+//       actualFiles.map(async (file) => {
+//         let signedUrl = null;
+//         try {
+//           signedUrl = await getSignedUrl(file.gcs_path);
+//         } catch (err) {
+//           console.error("Error generating signed URL:", err);
+//         }
+
+//         return {
+//           id: file.id,
+//           name: file.originalname,
+//           size: file.size,
+//           mimetype: file.mimetype,
+//           status: file.status,
+//           processing_progress: file.processing_progress,
+//           created_at: file.created_at,
+//           updated_at: file.updated_at,
+//           folder_path: file.folder_path,
+//           url: signedUrl,
+//         };
+//       })
+//     );
+
+//     // --- Organize files under folders ---
+//     const folderMap = {};
+//     folders.forEach(folder => {
+//       const key = folder.folder_path
+//         ? `${folder.folder_path}/${folder.name}`
+//         : folder.name;
+//       folderMap[key] = folder;
+//     });
+
+//     signedFiles.forEach(file => {
+//       const parentKey = file.folder_path || "";
+//       if (folderMap[parentKey]) {
+//         folderMap[parentKey].children.push(file);
+//       }
+//     });
+
+//     // --- Attach organized structure to case ---
+//     caseData.folders = folders;
+
+//     return res.status(200).json({
+//       message: "Case files fetched successfully.",
+//       case: caseData,
+//     });
+
+//   } catch (error) {
+//     console.error("❌ Error fetching case files:", error);
+//     res.status(500).json({ message: "Internal server error", details: error.message });
+//   }
+// };
+
+
 exports.getCase = async (req, res) => {
   try {
-    const userId = parseInt(req.user?.id);
-    if (!userId) {
-      return res.status(401).json({ error: "Unauthorized user" });
-    }
-
+    const userId = req.user?.id;
     const { caseId } = req.params;
-    if (!caseId) {
-      return res.status(400).json({ error: "Case ID is required." });
-    }
 
-    const getCaseQuery = `
+    if (!userId) return res.status(401).json({ error: "Unauthorized user" });
+    if (!caseId) return res.status(400).json({ error: "Case ID is required." });
+
+    // 1️⃣ Fetch case details
+    const caseQuery = `
       SELECT * FROM cases
-      WHERE id = $1::uuid AND user_id = $2;
+      WHERE id = $1 AND user_id = $2;
     `;
-    const { rows: caseRows } = await pool.query(getCaseQuery, [caseId, userId]);
-
+    const { rows: caseRows } = await pool.query(caseQuery, [caseId, userId]);
     if (caseRows.length === 0) {
       return res.status(404).json({ error: "Case not found or not authorized." });
     }
 
     const caseData = caseRows[0];
 
-    // Parse JSON fields back to objects/arrays with error handling
-    try {
-      if (typeof caseData.judges === 'string' && caseData.judges.trim() !== '') {
-        caseData.judges = JSON.parse(caseData.judges);
-      } else if (caseData.judges === null) {
-        caseData.judges = [];
-      }
-    } catch (e) {
-      console.warn(`⚠️ Could not parse judges JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.judges}`);
-      caseData.judges = [];
-    }
-    try {
-      if (typeof caseData.petitioners === 'string' && caseData.petitioners.trim() !== '') {
-        caseData.petitioners = JSON.parse(caseData.petitioners);
-      } else if (caseData.petitioners === null) {
-        caseData.petitioners = [];
-      }
-    } catch (e) {
-      console.warn(`⚠️ Could not parse petitioners JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.petitioners}`);
-      caseData.petitioners = [];
-    }
-    try {
-      if (typeof caseData.respondents === 'string' && caseData.respondents.trim() !== '') {
-        caseData.respondents = JSON.parse(caseData.respondents);
-      } else if (caseData.respondents === null) {
-        caseData.respondents = [];
-      }
-    } catch (e) {
-      console.warn(`⚠️ Could not parse respondents JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.respondents}`);
-      caseData.respondents = [];
-    }
+    // 2️⃣ Fetch the main folder for this case
+    const folderQuery = `
+      SELECT *
+      FROM user_files
+      WHERE user_id = $1
+        AND is_folder = true
+        AND folder_path LIKE $2
+      ORDER BY created_at ASC
+      LIMIT 1;
+    `;
+    // Assuming folder_path contains the case title
+    const folderPathPattern = `%${caseData.case_title}%`;
+    const { rows: folderRows } = await pool.query(folderQuery, [userId, folderPathPattern]);
+
+    // 3️⃣ Prepare folder metadata
+    const folders = folderRows.map(folder => ({
+      id: folder.id,
+      name: folder.originalname,
+      folder_path: folder.folder_path,
+      created_at: folder.created_at,
+      updated_at: folder.updated_at,
+      children: [], // Files will be fetched when user opens this folder
+    }));
+
+    // 4️⃣ Attach folders to case
+    caseData.folders = folders;
 
     return res.status(200).json({
       message: "Case fetched successfully.",
       case: caseData,
     });
+
   } catch (error) {
     console.error("❌ Error fetching case:", error);
-    res.status(500).json({
-      error: "Internal server error",
-      details: error.message,
-    });
+    res.status(500).json({ message: "Internal server error", details: error.message });
   }
 };
+
 
 exports .getFolders = async (req, res) => {
   try {
@@ -1052,56 +1343,300 @@ exports .getFolders = async (req, res) => {
 };
 
 /* ----------------- Upload Multiple Docs ----------------- */
-exports.uploadDocuments = async (req, res) => {
-  const userId = req.user.id;
-  const authorizationHeader = req.headers.authorization;
+// exports.uploadDocuments = async (req, res) => {
+//   const userId = req.user.id;
+//   const authorizationHeader = req.headers.authorization;
 
+//   try {
+//     const { folderName } = req.params;
+//     const { secret_id } = req.body; // NEW: Get secret_id from request body
+
+//     if (!req.files || req.files.length === 0) {
+//       return res.status(400).json({ error: "No files uploaded" });
+//     }
+
+//     // 1. Fetch user's usage and plan details
+//     const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+
+//     const safeFolder = sanitizeName(folderName);
+//     const uploadedFiles = [];
+
+//     for (const file of req.files) {
+//       // Check file size limit (existing check)
+//       if (file.size > 50 * 1024 * 1024) {
+//         uploadedFiles.push({
+//           originalname: file.originalname,
+//           error: `${file.originalname} too large (max 50MB).`,
+//           status: "failed"
+//         });
+//         continue; // Skip this file, try next
+//       }
+
+//       // 2. Enforce limits for each file
+//       const requestedResources = {
+//         documents: 1,
+//         storage_gb: file.size / (1024 * 1024 * 1024), // Convert bytes to GB
+//       };
+//       const { allowed, message } = await TokenUsageService.enforceLimits(usage, plan, requestedResources);
+
+//       if (!allowed) {
+//         uploadedFiles.push({
+//           originalname: file.originalname,
+//           error: message,
+//           status: "failed"
+//         });
+//         continue; // Skip this file, try next
+//       }
+
+//       const ext = mime.extension(file.mimetype) || "";
+//       const safeName = sanitizeName(path.basename(file.originalname, path.extname(file.originalname))) + (ext ? `.${ext}` : "");
+
+//       const basePath = `${userId}/documents/${safeFolder}`;
+//       const key = path.posix.join(basePath, safeName);
+//       const uniqueKey = await ensureUniqueKey(key);
+
+//       const fileRef = bucket.file(uniqueKey);
+//       await fileRef.save(file.buffer, {
+//         resumable: false,
+//         metadata: { contentType: file.mimetype },
+//       });
+
+//       const savedFile = await File.create({
+//         user_id: userId,
+//         originalname: safeName,
+//         gcs_path: uniqueKey,
+//         folder_path: safeFolder,
+//         mimetype: file.mimetype,
+//         size: file.size,
+//         is_folder: false,
+//         status: "queued",
+//         processing_progress: 0,
+//       });
+
+//       // 3. Increment usage after successful upload and metadata save
+//       await TokenUsageService.incrementUsage(userId, requestedResources);
+
+//       processDocumentWithAI(savedFile.id, file.buffer, file.mimetype, userId, safeName, secret_id).catch((err) =>
+//         console.error(`❌ Background processing failed for ${savedFile.id}:`, err.message)
+//       );
+
+//       const previewUrl = await makeSignedReadUrl(uniqueKey, 15);
+
+//       uploadedFiles.push({
+//         ...savedFile,
+//         previewUrl,
+//         status: "uploaded_and_queued"
+//       });
+//     }
+
+//     if (uploadedFiles.some(f => f.status === "uploaded_and_queued")) {
+//       return res.status(201).json({
+//         message: "Documents uploaded and processing started. Some may have been skipped due to limits.",
+//         documents: uploadedFiles,
+//       });
+//     } else {
+//       return res.status(403).json({
+//         error: "No documents could be uploaded due to plan limits or size restrictions.",
+//         documents: uploadedFiles,
+//         timeLeftUntilReset: timeLeft // Provide time left for user feedback
+//       });
+//     }
+//   } catch (error) {
+//     console.error("❌ uploadDocuments error:", error);
+//     res.status(500).json({ error: "Internal server error", details: error.message });
+//   }
+// };
+
+// exports.uploadDocumentsToCase = async (req, res) => {
+//   const userId = req.user.id;
+
+//   try {
+//     const { caseId } = req.params;
+//     const { secret_id } = req.body;
+
+//     if (!req.files || req.files.length === 0) {
+//       return res.status(400).json({ error: "No files uploaded" });
+//     }
+
+//     // 1️⃣ Get the case folder path
+//     const caseQuery = `SELECT * FROM cases WHERE id = $1 AND user_id = $2`;
+//     const { rows: caseRows } = await pool.query(caseQuery, [caseId, userId]);
+//     if (caseRows.length === 0) return res.status(404).json({ error: "Case not found" });
+
+//     const caseFolderId = caseRows[0].folder_id;
+//     if (!caseFolderId) return res.status(400).json({ error: "Case folder not found" });
+
+//     const folderQuery = `SELECT * FROM user_files WHERE id = $1 AND is_folder = true`;
+//     const { rows: folderRows } = await pool.query(folderQuery, [caseFolderId]);
+//     if (folderRows.length === 0) return res.status(400).json({ error: "Folder not found" });
+
+//     const folderPath = folderRows[0].folder_path;
+
+//     // 2️⃣ Upload files
+//     const uploadedFiles = [];
+//     for (const file of req.files) {
+//       const safeName = sanitizeName(file.originalname);
+//       const key = `${folderPath}/${safeName}`;
+//       const uniqueKey = await ensureUniqueKey(key);
+
+//       const fileRef = bucket.file(uniqueKey);
+//       await fileRef.save(file.buffer, {
+//         resumable: false,
+//         metadata: { contentType: file.mimetype },
+//       });
+
+//       const savedFile = await File.create({
+//         user_id: userId,
+//         originalname: safeName,
+//         gcs_path: uniqueKey,
+//         folder_path: folderPath,
+//         mimetype: file.mimetype,
+//         size: file.size,
+//         is_folder: false,
+//         status: "queued",
+//         processing_progress: 0,
+//       });
+
+//       const previewUrl = await makeSignedReadUrl(uniqueKey, 15);
+
+//       processDocumentWithAI(savedFile.id, file.buffer, file.mimetype, userId, safeName, secret_id).catch(console.error);
+
+//       uploadedFiles.push({
+//         ...savedFile,
+//         previewUrl,
+//         status: "uploaded_and_queued",
+//       });
+//     }
+
+//     return res.status(201).json({
+//       message: "Documents uploaded to case and processing started.",
+//       documents: uploadedFiles,
+//     });
+
+//   } catch (error) {
+//     console.error("❌ uploadDocumentsToCase error:", error);
+//     res.status(500).json({ error: "Internal server error", details: error.message });
+//   }
+// };
+// exports.uploadDocumentsToCase = async (req, res) => {
+//   try {
+//     const username = req.user.username; // Use username instead of user ID
+//     const userId = req.user.id;
+//     const { caseId } = req.params;
+//     const { secret_id } = req.body;
+
+//     if (!req.files || req.files.length === 0) {
+//       return res.status(400).json({ error: "No files uploaded" });
+//     }
+
+//     // 1️⃣ Get the case and its folder
+//     const caseQuery = `SELECT * FROM cases WHERE id = $1 AND user_id = $2`;
+//     const { rows: caseRows } = await pool.query(caseQuery, [caseId, userId]);
+//     if (caseRows.length === 0) return res.status(404).json({ error: "Case not found" });
+
+//     const caseFolderId = caseRows[0].folder_id;
+//     if (!caseFolderId) return res.status(400).json({ error: "Case folder not found" });
+
+//     const folderQuery = `SELECT * FROM user_files WHERE id = $1 AND is_folder = true`;
+//     const { rows: folderRows } = await pool.query(folderQuery, [caseFolderId]);
+//     if (folderRows.length === 0) return res.status(404).json({ error: "Folder not found" });
+
+//     const folderRow = folderRows[0];
+//     let folderPath = folderRow.folder_path;
+
+//     // Ensure folder path uses username instead of user ID
+//     if (!folderPath.startsWith(`users/${username}/`)) {
+//       folderPath = `users/${username}/cases/${folderRow.originalname}/`;
+//     }
+//     if (!folderPath.endsWith("/")) folderPath += "/";
+
+//     // 2️⃣ Upload files
+//     const uploadedFiles = [];
+//     for (const file of req.files) {
+//       const ext = path.extname(file.originalname);
+//       const baseName = path.basename(file.originalname, ext);
+//       const safeName = sanitizeName(baseName) + ext;
+
+//       const key = `${folderPath}${safeName}`;
+//       const uniqueKey = await ensureUniqueKey(key);
+
+//       const fileRef = bucket.file(uniqueKey);
+//       await fileRef.save(file.buffer, {
+//         resumable: false,
+//         metadata: { contentType: file.mimetype },
+//       });
+
+//       const savedFile = await File.create({
+//         user_id: userId,
+//         originalname: safeName,
+//         gcs_path: uniqueKey,
+//         folder_path: folderPath,
+//         mimetype: file.mimetype,
+//         size: file.size,
+//         is_folder: false,
+//         status: "queued",
+//         processing_progress: 0,
+//       });
+
+//       const previewUrl = await makeSignedReadUrl(uniqueKey, 15);
+
+//       processDocumentWithAI(savedFile.id, file.buffer, file.mimetype, userId, safeName, secret_id).catch(console.error);
+
+//       uploadedFiles.push({
+//         ...savedFile,
+//         previewUrl,
+//         status: "uploaded_and_queued",
+//       });
+//     }
+
+//     return res.status(201).json({
+//       message: "Documents uploaded to case and processing started.",
+//       documents: uploadedFiles,
+//     });
+
+//   } catch (error) {
+//     console.error("❌ uploadDocumentsToCase error:", error);
+//     res.status(500).json({ error: "Internal server error", details: error.message });
+//   }
+// };
+
+// Route: POST /docs/:folderName/upload
+exports.uploadDocumentsToCaseByFolderName = async (req, res) => {
   try {
-    const { folderName } = req.params;
-    const { secret_id } = req.body; // NEW: Get secret_id from request body
+    const username = req.user.username; // user folder name
+    const userId = req.user.id;
+    const { folderName } = req.params; // Case folder name
+    const { secret_id } = req.body;
 
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: "No files uploaded" });
     }
 
-    // 1. Fetch user's usage and plan details
-    const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+    // 1️⃣ Find the folder in DB using folderName and user
+    const folderQuery = `
+      SELECT * FROM user_files
+      WHERE user_id = $1 AND is_folder = true AND originalname = $2
+    `;
+    const { rows: folderRows } = await pool.query(folderQuery, [userId, folderName]);
+    if (folderRows.length === 0) {
+      return res.status(404).json({ error: `Folder "${folderName}" not found for this user.` });
+    }
 
-    const safeFolder = sanitizeName(folderName);
+    const folderRow = folderRows[0];
+    let folderPath = folderRow.folder_path;
+    if (!folderPath.startsWith(`users/${username}/`)) {
+      folderPath = `users/${username}/cases/${folderName}/`;
+    }
+    if (!folderPath.endsWith("/")) folderPath += "/";
+
+    // 2️⃣ Upload each file to this folder
     const uploadedFiles = [];
-
     for (const file of req.files) {
-      // Check file size limit (existing check)
-      if (file.size > 50 * 1024 * 1024) {
-        uploadedFiles.push({
-          originalname: file.originalname,
-          error: `${file.originalname} too large (max 50MB).`,
-          status: "failed"
-        });
-        continue; // Skip this file, try next
-      }
+      const ext = path.extname(file.originalname);
+      const baseName = path.basename(file.originalname, ext);
+      const safeName = sanitizeName(baseName) + ext;
 
-      // 2. Enforce limits for each file
-      const requestedResources = {
-        documents: 1,
-        storage_gb: file.size / (1024 * 1024 * 1024), // Convert bytes to GB
-      };
-      const { allowed, message } = await TokenUsageService.enforceLimits(usage, plan, requestedResources);
-
-      if (!allowed) {
-        uploadedFiles.push({
-          originalname: file.originalname,
-          error: message,
-          status: "failed"
-        });
-        continue; // Skip this file, try next
-      }
-
-      const ext = mime.extension(file.mimetype) || "";
-      const safeName = sanitizeName(path.basename(file.originalname, path.extname(file.originalname))) + (ext ? `.${ext}` : "");
-
-      const basePath = `${userId}/documents/${safeFolder}`;
-      const key = path.posix.join(basePath, safeName);
+      const key = `${folderPath}${safeName}`;
       const uniqueKey = await ensureUniqueKey(key);
 
       const fileRef = bucket.file(uniqueKey);
@@ -1114,7 +1649,7 @@ exports.uploadDocuments = async (req, res) => {
         user_id: userId,
         originalname: safeName,
         gcs_path: uniqueKey,
-        folder_path: safeFolder,
+        folder_path: folderPath,
         mimetype: file.mimetype,
         size: file.size,
         is_folder: false,
@@ -1122,36 +1657,24 @@ exports.uploadDocuments = async (req, res) => {
         processing_progress: 0,
       });
 
-      // 3. Increment usage after successful upload and metadata save
-      await TokenUsageService.incrementUsage(userId, requestedResources);
-
-      processDocumentWithAI(savedFile.id, file.buffer, file.mimetype, userId, safeName, secret_id).catch((err) =>
-        console.error(`❌ Background processing failed for ${savedFile.id}:`, err.message)
-      );
-
       const previewUrl = await makeSignedReadUrl(uniqueKey, 15);
+
+      processDocumentWithAI(savedFile.id, file.buffer, file.mimetype, userId, safeName, secret_id).catch(console.error);
 
       uploadedFiles.push({
         ...savedFile,
         previewUrl,
-        status: "uploaded_and_queued"
+        status: "uploaded_and_queued",
       });
     }
 
-    if (uploadedFiles.some(f => f.status === "uploaded_and_queued")) {
-      return res.status(201).json({
-        message: "Documents uploaded and processing started. Some may have been skipped due to limits.",
-        documents: uploadedFiles,
-      });
-    } else {
-      return res.status(403).json({
-        error: "No documents could be uploaded due to plan limits or size restrictions.",
-        documents: uploadedFiles,
-        timeLeftUntilReset: timeLeft // Provide time left for user feedback
-      });
-    }
+    return res.status(201).json({
+      message: "Documents uploaded to case folder and processing started.",
+      documents: uploadedFiles,
+    });
+
   } catch (error) {
-    console.error("❌ uploadDocuments error:", error);
+    console.error("❌ uploadDocumentsToCaseByFolderName error:", error);
     res.status(500).json({ error: "Internal server error", details: error.message });
   }
 };
@@ -2215,6 +2738,46 @@ exports.getFolderChatsByFolder = async (req, res) => {
   }
 };
 
+/* ---------------------- Get Documents in a Specific Folder ---------------------- */
+exports.getDocumentsInFolder = async (req, res) => {
+  try {
+    const { folderName } = req.params;
+    const userId = req.user.id;
+
+    if (!folderName) {
+      return res.status(400).json({ error: "Folder name is required." });
+    }
+
+    const files = await File.findByUserIdAndFolderPath(userId, folderName);
+
+    const documents = files
+      .filter(file => !file.is_folder)
+      .map(file => ({
+        id: file.id,
+        name: file.originalname,
+        size: file.size,
+        mimetype: file.mimetype,
+        created_at: file.created_at,
+        status: file.status,
+        processing_progress: file.processing_progress,
+        folder_path: file.folder_path,
+      }));
+
+    return res.status(200).json({
+      message: `Documents in folder '${folderName}' fetched successfully.`,
+      folderName: folderName,
+      documents: documents,
+      totalDocuments: documents.length,
+    });
+  } catch (error) {
+    console.error("❌ Error fetching documents in folder:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      details: error.message,
+    });
+  }
+};
+
 /* ---------------------- Get All Cases for User ---------------------- */
 exports.getAllCases = async (req, res) => {
   try {
@@ -2278,3 +2841,68 @@ exports.getAllCases = async (req, res) => {
     });
   }
 };
+
+
+// GET /docs/:folderName/files
+exports.getCaseFilesByFolderName = async (req, res) => {
+  try {
+    const username = req.user.username; // user folder name
+    const userId = req.user.id;
+    const { folderName } = req.params;
+
+    if (!folderName) {
+      return res.status(400).json({ error: "Folder name is required" });
+    }
+
+    // Full folder path in storage
+    const folderPath = `users/${username}/cases/${folderName}/`;
+
+    // Fetch all files in this folder (exclude subfolders)
+    const filesQuery = `
+      SELECT
+        id,
+        user_id,
+        originalname,
+        gcs_path,
+        folder_path,
+        mimetype,
+        size,
+        status,
+        processing_progress,
+        full_text_content,
+        summary,
+        edited_docx_path,
+        edited_pdf_path,
+        processed_at,
+        created_at,
+        updated_at,
+        is_folder
+      FROM user_files
+      WHERE user_id = $1
+        AND folder_path = $2
+        AND is_folder = false
+      ORDER BY created_at DESC
+    `;
+    const { rows: files } = await pool.query(filesQuery, [userId, folderPath]);
+
+    // Add signed URLs for preview
+    const filesWithUrls = await Promise.all(
+      files.map(async (file) => {
+        const previewUrl = await makeSignedReadUrl(file.gcs_path, 15); // 15 min signed URL
+        return {
+          ...file,
+          previewUrl,
+        };
+      })
+    );
+
+    return res.status(200).json({
+      message: "Folder files fetched successfully.",
+      files: filesWithUrls,
+    });
+  } catch (error) {
+    console.error("❌ getCaseFilesByFolderName error:", error);
+    res.status(500).json({ error: "Internal server error", details: error.message });
+  }
+};
+

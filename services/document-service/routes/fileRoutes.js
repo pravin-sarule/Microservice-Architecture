@@ -22,8 +22,11 @@ router.get("/folders", authMiddleware.protect, fileController.getFolders);
 // Get all cases for a user
 router.get("/cases", authMiddleware.protect, fileController.getAllCases);
 
+// Get all documents in a specific folder
+router.get("/:folderName/documents", authMiddleware.protect, fileController.getDocumentsInFolder);
+
 // Upload multiple docs to folder
-router.post("/:folderName/upload", authMiddleware.protect, checkDocumentUploadLimits, upload.array("files", 10), fileController.uploadDocuments);
+router.post("/:folderName/upload", authMiddleware.protect, checkDocumentUploadLimits, upload.array("files", 10), fileController.uploadDocumentsToCaseByFolderName);
 
 // Generate & store folder summary
 router.get("/:folderName/summary", authMiddleware.protect, fileController.getFolderSummary);
@@ -52,4 +55,7 @@ router.post("/:folderName/sessions/:sessionId/continue", authMiddleware.protect,
 router.delete("/:folderName/sessions/:sessionId", authMiddleware.protect, fileController.deleteFolderChatSession);
 
 router.get("/:folderName/chats", authMiddleware.protect, fileController.getFolderChatsByFolder);
+
+
+router.get("/:folderName/files", authMiddleware.protect, fileController.getCaseFilesByFolderName)
 module.exports = router;
