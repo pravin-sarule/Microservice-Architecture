@@ -2754,7 +2754,7 @@ async function askLLM(provider, userMessage, context = '') {
     if (provider === 'anthropic' || provider === 'claude-sonnet-4') {
       requestBody = {
         model: config.model,
-        max_tokens: 4096,
+        max_tokens: 1000000,
         system: systemPrompt,
         messages: [{ role: 'user', content: finalUserMessage }],
       };
@@ -2770,6 +2770,8 @@ async function askLLM(provider, userMessage, context = '') {
       };
     }
 
+    console.log(`[askLLM] Anthropic Request Body (messages.0.content type): ${typeof requestBody.messages[0].content}`);
+    console.log(`[askLLM] Anthropic Request Body (system type): ${typeof requestBody.system}`);
     console.log(`[askLLM] Calling ${provider} API...`);
     const response = await axios.post(config.apiUrl, requestBody, {
       headers: config.headers,

@@ -192,11 +192,13 @@ async function askLLM(provider, userMessage, context = '') {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: finalUserMessage },
         ],
-        max_tokens: 4096,
+        max_tokens: 1000000,
         temperature: 0.7,
       };
     }
 
+    console.log(`[askLLM] Anthropic Request Body (messages.0.content type): ${typeof requestBody.messages[0].content}`);
+    console.log(`[askLLM] Anthropic Request Body (system type): ${typeof requestBody.system}`);
     console.log(`[askLLM] Calling ${provider} API...`);
     const response = await axios.post(config.apiUrl, requestBody, {
       headers: config.headers,
