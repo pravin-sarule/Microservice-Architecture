@@ -7,7 +7,8 @@ const {
   getAllSecrets,
   fetchSecretValueFromGCP,
   createSecretInGCP,
-  triggerSecretLLM // Add the new function
+  triggerSecretLLM,
+  triggerAskLlmForFolder // Add the new function for folders
 } = require('../controllers/secretManagerController');
 
 // 🔍 GET /api/secrets → list all secrets (use ?fetch=true to include secret values)
@@ -21,5 +22,8 @@ router.post('/create', createSecretInGCP);
 
 // 🧠 POST /api/secrets/trigger-llm → trigger LLM with secret content
 router.post('/trigger-llm', protect, triggerSecretLLM);
+
+// 🧠 POST /api/secrets/trigger-llm-folder → trigger LLM with secret content for a folder
+router.post('/trigger-llm-folder', protect, triggerAskLlmForFolder);
 
 module.exports = router;
