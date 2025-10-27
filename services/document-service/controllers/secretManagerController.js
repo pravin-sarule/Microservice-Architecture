@@ -1,6 +1,6 @@
 
 
-
+//
 const db = require('../config/db');
 const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
 const fs = require('fs');
@@ -671,3 +671,6 @@ module.exports = {
   triggerAskLlmForFolder, // Export the new function
   getSecretDetailsById,
 };
+
+
+// const pool//
