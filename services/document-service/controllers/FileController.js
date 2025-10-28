@@ -637,7 +637,8 @@ exports.deleteCase = async (req, res) => {
       }
 
       // Now delete the folder record itself from user_files
-      await File.delete(folderId);
+      const deleteFolderQuery = `DELETE FROM user_files WHERE id = $1::uuid AND user_id = $2;`;
+      await client.query(deleteFolderQuery, [folderId, userId]);
       console.log(`🗑️ Deleted folder record with ID: ${folderId}`);
     }
 
@@ -2133,14 +2134,32 @@ exports.getAllCases = async (req, res) => {
     }
 
     const getAllCasesQuery = `
-      SELECT * FROM cases
-      WHERE user_id = $1
-      ORDER BY created_at DESC;
+      SELECT
+        c.*,
+        ct.name as case_type_name,
+        st.name as sub_type_name,
+        co.name as court_name_name
+      FROM cases c
+      LEFT JOIN case_types ct ON c.case_type::integer = ct.id
+      LEFT JOIN sub_types st ON c.sub_type::integer = st.id
+      LEFT JOIN courts co ON c.court_name::integer = co.id
+      WHERE c.user_id = $1
+      ORDER BY c.created_at DESC;
     `;
     const { rows: cases } = await pool.query(getAllCasesQuery, [userId]);
 
     // Parse JSON fields for each case
     const formattedCases = cases.map(caseData => {
+      // Replace IDs with names
+      caseData.case_type = caseData.case_type_name;
+      caseData.sub_type = caseData.sub_type_name;
+      caseData.court_name = caseData.court_name_name;
+
+      // Remove the now redundant name fields
+      delete caseData.case_type_name;
+      delete caseData.sub_type_name;
+      delete caseData.court_name_name;
+
       try {
         if (typeof caseData.judges === 'string' && caseData.judges.trim() !== '') {
           caseData.judges = JSON.parse(caseData.judges);
