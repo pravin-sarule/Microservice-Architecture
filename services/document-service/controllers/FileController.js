@@ -1,6 +1,5 @@
 
 
-
 require("dotenv").config();
 
 const mime = require("mime-types");
@@ -431,7 +430,7 @@ async function createFolderInternal(userId, folderName, parentPath = "") {
 
     // FIX: Store folder_path consistently for querying later
     const folderPath = parentPath ? `${parentPath}/${safeFolderName}` : safeFolderName;
-    
+   
     // GCS path for folder
     const gcsPath = `${userId}/documents/${folderPath}/`;
 
@@ -899,26 +898,26 @@ exports.uploadDocumentsToCaseByFolderName = async (req, res) => {
     // FIX 1: Find the folder using the stored folder_path pattern
     const folderQuery = `
       SELECT * FROM user_files
-      WHERE user_id = $1 
-        AND is_folder = true 
+      WHERE user_id = $1
+        AND is_folder = true
         AND originalname = $2
       ORDER BY created_at DESC
       LIMIT 1
     `;
     const { rows: folderRows } = await pool.query(folderQuery, [userId, folderName]);
-    
+   
     if (folderRows.length === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: `Folder "${folderName}" not found for this user.`,
         debug: { userId, folderName }
       });
     }
 
     const folderRow = folderRows[0];
-    
+   
     // FIX 2: Use the folder_path from the database for consistency
     let folderPathForFiles = folderRow.folder_path;
-    
+   
     console.log(`📁 Found folder. Database folder_path: ${folderPathForFiles}`);
     console.log(`📁 GCS path: ${folderRow.gcs_path}`);
 
@@ -961,13 +960,13 @@ exports.uploadDocumentsToCaseByFolderName = async (req, res) => {
 
         // Process document
         processDocumentWithAI(
-          savedFile.id, 
-          file.buffer, 
-          file.mimetype, 
-          userId, 
-          safeName, 
+          savedFile.id,
+          file.buffer,
+          file.mimetype,
+          userId,
+          safeName,
           secret_id
-        ).catch(err => 
+        ).catch(err =>
           console.error(`❌ Background processing failed for ${savedFile.id}:`, err.message)
         );
 
@@ -998,9 +997,9 @@ exports.uploadDocumentsToCaseByFolderName = async (req, res) => {
 
   } catch (error) {
     console.error("❌ uploadDocumentsToCaseByFolderName error:", error);
-    res.status(500).json({ 
-      error: "Internal server error", 
-      details: error.message 
+    res.status(500).json({
+      error: "Internal server error",
+      details: error.message
     });
   }
 };
@@ -1029,12 +1028,12 @@ exports.getFolderSummary = async (req, res) => {
 
     let combinedText = "";
     let documentDetails = [];
-    
+   
     for (const f of processed) {
       const chunks = await FileChunk.getChunksByFileId(f.id);
       const fileText = chunks.map((c) => c.content).join("\n\n");
       combinedText += `\n\n[Document: ${f.originalname}]\n${fileText}`;
-      
+     
       documentDetails.push({
         name: f.originalname,
         summary: f.summary || "Summary not available",
@@ -1122,8 +1121,8 @@ exports.queryFolderDocuments = async (req, res) => {
     const filesQuery = `
       SELECT id, originalname, folder_path, status
       FROM user_files
-      WHERE user_id = $1 
-        AND is_folder = false 
+      WHERE user_id = $1
+        AND is_folder = false
         AND status = 'processed'
         AND folder_path LIKE $2
       ORDER BY created_at DESC;
@@ -1185,7 +1184,7 @@ exports.queryFolderDocuments = async (req, res) => {
 
       const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } =
         secretResult.rows[0];
-      
+     
       // ✅ FIX: Store only the secret name, not the actual secret content
       finalPromptLabel = secretName;
       storedQuestion = secretName; // Store the prompt name in DB
@@ -1222,7 +1221,7 @@ exports.queryFolderDocuments = async (req, res) => {
       // Call model
       answer = await askFolderLLMService(provider, finalPrompt);
       usedChunkIds = allChunks.map((c) => c.id);
-      
+     
       console.log(`✅ Secret prompt processed: "${secretName}"`);
     }
 
@@ -1241,16 +1240,16 @@ exports.queryFolderDocuments = async (req, res) => {
       finalPromptLabel = null; // No prompt label for custom questions
 
       provider = "gemini"; // default
-      
+     
       // Calculate token cost
-      chatCost = Math.ceil(question.length / 100) + 
+      chatCost = Math.ceil(question.length / 100) +
                  Math.ceil(allChunks.reduce((sum, c) => sum + c.content.length, 0) / 200);
 
       // Check token limits
       const requestedResources = { tokens: chatCost, ai_analysis: 1 };
       const { allowed, message } = await TokenUsageService.enforceLimits(
-        usage, 
-        plan, 
+        usage,
+        plan,
         requestedResources
       );
 
@@ -1264,7 +1263,7 @@ exports.queryFolderDocuments = async (req, res) => {
       // Use vector search for relevant chunks
       const questionEmbedding = await generateEmbedding(question);
       const allRelevantChunks = [];
-      
+     
       for (const file of files) {
         const relevant = await ChunkVector.findNearestChunksAcrossFiles(
           questionEmbedding,
@@ -1286,7 +1285,7 @@ exports.queryFolderDocuments = async (req, res) => {
         .join("\n\n");
 
       answer = await askFolderLLMService(provider, question, combinedContext);
-      
+     
       console.log(`✅ Custom question processed`);
     }
 
@@ -1349,7 +1348,7 @@ exports.getFolderProcessingStatus = async (req, res) => {
 
     const files = await File.findByUserIdAndFolderPath(userId, folderName);
     const documents = files.filter(f => !f.is_folder);
-    
+   
     if (documents.length === 0) {
       return res.json({
         folderName,
@@ -1383,9 +1382,9 @@ exports.getFolderProcessingStatus = async (req, res) => {
 
   } catch (error) {
     console.error("❌ getFolderProcessingStatus error:", error);
-    res.status(500).json({ 
-      error: "Failed to get folder processing status", 
-      details: error.message 
+    res.status(500).json({
+      error: "Failed to get folder processing status",
+      details: error.message
     });
   }
 };
@@ -1795,9 +1794,9 @@ exports.continueFolderChat = async (req, res) => {
     // Get all processed files in the folder
     const files = await File.findByUserIdAndFolderPath(userId, folderName);
     const processedFiles = files.filter(f => !f.is_folder && f.status === "processed");
-    
+   
     console.log(`[continueFolderChat] Found ${processedFiles.length} processed files in folder ${folderName}`);
-    
+   
     if (processedFiles.length === 0) {
       return res.status(404).json({
         error: "No processed documents in folder",
@@ -1826,7 +1825,7 @@ exports.continueFolderChat = async (req, res) => {
 
     if (allChunks.length === 0) {
       const answer = "The documents in this folder don't appear to have any processed content yet. Please wait for processing to complete or check the document processing status.";
-      
+     
       // Save the new chat message
       const savedChat = await FolderChat.saveFolderChat(
         userId,
@@ -1866,7 +1865,7 @@ exports.continueFolderChat = async (req, res) => {
 
     // Token cost (rough estimate)
     chatCost = Math.ceil(question.length / 100) + Math.ceil(allChunks.reduce((sum, c) => sum + c.content.length, 0) / 200) + Math.ceil(conversationContext.length / 200); // Question tokens + context tokens + history tokens
-    
+   
     // 2. Enforce token limits for AI analysis
     const requestedResources = { tokens: chatCost, ai_analysis: 1 };
     const { allowed, message } = await TokenUsageService.enforceLimits(usage, plan, requestedResources);
@@ -1883,31 +1882,31 @@ exports.continueFolderChat = async (req, res) => {
     const questionWords = questionLower
       .split(/\s+/)
       .filter(word => word.length > 3 && !['what', 'where', 'when', 'how', 'why', 'which', 'this', 'that', 'these', 'those'].includes(word));
-    
+   
     console.log(`[continueFolderChat] Question keywords:`, questionWords);
 
     let relevantChunks = [];
-    
+   
     if (questionWords.length > 0) {
       // Score chunks based on keyword matches
       relevantChunks = allChunks.map(chunk => {
         const contentLower = chunk.content.toLowerCase();
         let score = 0;
-        
+       
         // Check for exact keyword matches
         for (const word of questionWords) {
           const regex = new RegExp(`\\b${word}\\b`, 'gi');
           const matches = (contentLower.match(regex) || []).length;
           score += matches * 2;
         }
-        
+       
         // Check for partial matches
         for (const word of questionWords) {
           if (contentLower.includes(word)) {
             score += 1;
           }
         }
-        
+       
         return {
           ...chunk,
           similarity_score: score
@@ -2037,10 +2036,10 @@ exports.deleteFolderChatSession = async (req, res) => {
     });
 
     if (deletedCount === 0) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         error: "Chat session not found",
         folderName,
-        sessionId 
+        sessionId
       });
     }
 
@@ -2053,9 +2052,9 @@ exports.deleteFolderChatSession = async (req, res) => {
     });
   } catch (error) {
     console.error("❌ deleteFolderChatSession error:", error);
-    res.status(500).json({ 
-      error: "Failed to delete chat session", 
-      details: error.message 
+    res.status(500).json({
+      error: "Failed to delete chat session",
+      details: error.message
     });
   }
 };
@@ -2126,6 +2125,88 @@ exports.getDocumentsInFolder = async (req, res) => {
 };
 
 /* ---------------------- Get All Cases for User ---------------------- */
+// exports.getAllCases = async (req, res) => {
+//   try {
+//     const userId = parseInt(req.user?.id);
+//     if (!userId) {
+//       return res.status(401).json({ error: "Unauthorized user" });
+//     }
+
+//     const getAllCasesQuery = `
+//       SELECT
+//         c.*,
+//         ct.name as case_type_name,
+//         st.name as sub_type_name,
+//         co.name as court_name_name
+//       FROM cases c
+//       LEFT JOIN case_types ct ON c.case_type::integer = ct.id
+//       LEFT JOIN sub_types st ON c.sub_type::integer = st.id
+//       LEFT JOIN courts co ON c.court_name::integer = co.id
+//       WHERE c.user_id = $1
+//       ORDER BY c.created_at DESC;
+//     `;
+//     const { rows: cases } = await pool.query(getAllCasesQuery, [userId]);
+
+//     // Parse JSON fields for each case
+//     const formattedCases = cases.map(caseData => {
+//       // Replace IDs with names
+//       caseData.case_type = caseData.case_type_name;
+//       caseData.sub_type = caseData.sub_type_name;
+//       caseData.court_name = caseData.court_name_name;
+
+//       // Remove the now redundant name fields
+//       delete caseData.case_type_name;
+//       delete caseData.sub_type_name;
+//       delete caseData.court_name_name;
+
+//       try {
+//         if (typeof caseData.judges === 'string' && caseData.judges.trim() !== '') {
+//           caseData.judges = JSON.parse(caseData.judges);
+//         } else if (caseData.judges === null) {
+//           caseData.judges = []; // Default to empty array if null
+//         }
+//       } catch (e) {
+//         console.warn(`⚠️ Could not parse judges JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.judges}`);
+//         caseData.judges = []; // Fallback to empty array on error
+//       }
+//       try {
+//         if (typeof caseData.petitioners === 'string' && caseData.petitioners.trim() !== '') {
+//           caseData.petitioners = JSON.parse(caseData.petitioners);
+//         } else if (caseData.petitioners === null) {
+//           caseData.petitioners = []; // Default to empty array if null
+//         }
+//       } catch (e) {
+//         console.warn(`⚠️ Could not parse petitioners JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.petitioners}`);
+//         caseData.petitioners = []; // Fallback to empty array on error
+//       }
+//       try {
+//         if (typeof caseData.respondents === 'string' && caseData.respondents.trim() !== '') {
+//           caseData.respondents = JSON.parse(caseData.respondents);
+//         } else if (caseData.respondents === null) {
+//           caseData.respondents = []; // Default to empty array if null
+//         }
+//       } catch (e) {
+//         console.warn(`⚠️ Could not parse respondents JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.respondents}`);
+//         caseData.respondents = []; // Fallback to empty array on error
+//       }
+//       return caseData;
+//     });
+
+//     return res.status(200).json({
+//       message: "Cases fetched successfully.",
+//       cases: formattedCases,
+//       totalCases: formattedCases.length,
+//     });
+//   } catch (error) {
+//     console.error("❌ Error fetching all cases:", error);
+//     res.status(500).json({
+//       error: "Internal server error",
+//       details: error.message,
+//     });
+//   }
+// };
+
+/* ---------------------- Get All Cases for User (FIXED) ---------------------- */
 exports.getAllCases = async (req, res) => {
   try {
     const userId = parseInt(req.user?.id);
@@ -2140,9 +2221,21 @@ exports.getAllCases = async (req, res) => {
         st.name as sub_type_name,
         co.name as court_name_name
       FROM cases c
-      LEFT JOIN case_types ct ON c.case_type::integer = ct.id
-      LEFT JOIN sub_types st ON c.sub_type::integer = st.id
-      LEFT JOIN courts co ON c.court_name::integer = co.id
+      LEFT JOIN case_types ct ON 
+        CASE 
+          WHEN c.case_type ~ '^[0-9]+$' THEN c.case_type::integer = ct.id
+          ELSE false
+        END
+      LEFT JOIN sub_types st ON 
+        CASE 
+          WHEN c.sub_type ~ '^[0-9]+$' THEN c.sub_type::integer = st.id
+          ELSE false
+        END
+      LEFT JOIN courts co ON 
+        CASE 
+          WHEN c.court_name ~ '^[0-9]+$' THEN c.court_name::integer = co.id
+          ELSE false
+        END
       WHERE c.user_id = $1
       ORDER BY c.created_at DESC;
     `;
@@ -2150,10 +2243,10 @@ exports.getAllCases = async (req, res) => {
 
     // Parse JSON fields for each case
     const formattedCases = cases.map(caseData => {
-      // Replace IDs with names
-      caseData.case_type = caseData.case_type_name;
-      caseData.sub_type = caseData.sub_type_name;
-      caseData.court_name = caseData.court_name_name;
+      // Use lookup table names if available, otherwise use the original values
+      caseData.case_type = caseData.case_type_name || caseData.case_type;
+      caseData.sub_type = caseData.sub_type_name || caseData.sub_type;
+      caseData.court_name = caseData.court_name_name || caseData.court_name;
 
       // Remove the now redundant name fields
       delete caseData.case_type_name;
@@ -2206,8 +2299,6 @@ exports.getAllCases = async (req, res) => {
     });
   }
 };
-
-
 
 /* ---------------------- Get Case Files by Folder (FINAL FIXED) ---------------------- */
 exports.getCaseFilesByFolderName = async (req, res) => {
@@ -2314,3 +2405,4 @@ exports.getCaseFilesByFolderName = async (req, res) => {
     });
   }
 };
+
