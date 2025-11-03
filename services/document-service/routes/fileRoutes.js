@@ -58,4 +58,8 @@ router.get("/:folderName/chats", authMiddleware.protect, fileController.getFolde
 
 
 router.get("/:folderName/files", authMiddleware.protect, fileController.getCaseFilesByFolderName)
+
+
+router.delete("/:fileId", authMiddleware.protect, fileController.deleteDocument);
+
 module.exports = router;

@@ -35,7 +35,9 @@ async function chunkDocument(
   let chunks = [];
 
   // Route to appropriate chunking method
-  switch (method) {
+  const effectiveMethod = method || 'recursive';
+
+  switch (effectiveMethod) {
     case 'fixed_size':
       chunks = await fixedSizeChunker(structuredContent, chunkSize, chunkOverlap, formatChunk);
       break;

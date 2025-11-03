@@ -83,170 +83,346 @@ async function makeSignedReadUrl(objectKey, minutes = 15) {
   return signedUrl;
 }
 
-/* ----------------- Process Document ----------------- */
-async function processDocumentWithAI(fileId, fileBuffer, mimetype, userId, originalFilename, secretId = null) {
+
+// Progress stage definitions
+const PROGRESS_STAGES = {
+  INIT: { start: 0, end: 5, status: 'batch_queued' },
+  UPLOAD: { start: 5, end: 15, status: 'batch_queued' },
+  BATCH_START: { start: 15, end: 20, status: 'batch_processing' },
+  BATCH_OCR: { start: 20, end: 42, status: 'batch_processing' },
+  FETCH_RESULTS: { start: 42, end: 45, status: 'processing' },
+  CONFIG: { start: 45, end: 48, status: 'processing' },
+  CHUNKING: { start: 48, end: 58, status: 'processing' },
+  EMBEDDINGS: { start: 58, end: 76, status: 'processing' },
+  SAVE_CHUNKS: { start: 76, end: 82, status: 'processing' },
+  SAVE_VECTORS: { start: 82, end: 88, status: 'processing' },
+  SUMMARY: { start: 88, end: 96, status: 'processing' },
+  FINALIZE: { start: 96, end: 100, status: 'processing' },
+};
+
+/**
+ * Get human-readable operation name based on progress
+ */
+function getOperationName(progress, status) {
+  if (status === "processed" || status === "completed") return "Completed";
+  if (status === "error" || status === "failed") return "Failed";
+  
+  const p = parseFloat(progress) || 0;
+  
+  // Batch queued stage (0-15%)
+  if (status === "batch_queued") {
+    if (p < 5) return "Initializing document processing";
+    if (p < 15) return "Uploading document to cloud storage";
+    return "Preparing batch operation";
+  }
+  
+  // Batch processing stage (15-42%)
+  if (status === "batch_processing") {
+    if (p < 20) return "Starting Document AI batch processing";
+    if (p < 25) return "Document uploaded to processing queue";
+    if (p < 30) return "OCR analysis in progress";
+    if (p < 35) return "Extracting text from document";
+    if (p < 40) return "Processing document layout";
+    return "Completing OCR extraction";
+  }
+  
+  // Post-processing stage (42-100%)
+  if (status === "processing") {
+    if (p < 45) return "Fetching OCR results";
+    if (p < 48) return "Loading chunking configuration";
+    if (p < 52) return "Initializing chunking";
+    if (p < 58) return "Chunking document into segments";
+    if (p < 64) return "Preparing for embedding";
+    if (p < 70) return "Connecting to embedding service";
+    if (p < 76) return "Generating AI embeddings";
+    if (p < 79) return "Preparing database storage";
+    if (p < 82) return "Saving chunks to database";
+    if (p < 85) return "Preparing vector embeddings";
+    if (p < 88) return "Storing vector embeddings";
+    if (p < 92) return "Generating AI summary";
+    if (p < 96) return "Saving document summary";
+    if (p < 98) return "Updating document metadata";
+    if (p < 100) return "Finalizing document processing";
+    return "Processing complete";
+  }
+  
+  return "Queued";
+}
+
+// ============================================================================
+// PROGRESS UPDATE HELPERS
+// ============================================================================
+
+/**
+ * Update progress with consistent formatting and DATABASE WRITE
+ */
+const updateProgress = async (fileId, status, progress, operation = null) => {
+  const currentOperation = operation || getOperationName(progress, status);
+  
+  // ✅ CRITICAL: Actually update the database
+  await File.updateProcessingStatus(fileId, status, progress, currentOperation);
+  
+  console.log(`[Progress] File ${fileId.substring(0, 8)}...: ${progress.toFixed(1)}% - ${currentOperation}`);
+  
+  return {
+    file_id: fileId,
+    status,
+    progress: parseFloat(progress.toFixed(1)),
+    operation: currentOperation,
+    timestamp: new Date().toISOString()
+  };
+};
+
+/**
+ * Smoothly increment progress with consistent intervals
+ */
+const smoothProgressIncrement = async (
+  fileId,
+  status,
+  startProgress,
+  endProgress,
+  operation = null,
+  delayMs = 100
+) => {
+  const start = parseFloat(startProgress);
+  const end = parseFloat(endProgress);
+  const steps = Math.ceil(end - start);
+  
+  for (let i = 0; i <= steps; i++) {
+    const currentProgress = start + i;
+    if (currentProgress > end) break;
+    
+    await updateProgress(fileId, status, currentProgress, operation);
+    
+    if (i < steps) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+};
+
+// ============================================================================
+// BATCH POLLING WITH CLEAR PROGRESS
+// ============================================================================
+
+/**
+ * Background polling to update batch processing progress (20% -> 42%)
+ */
+async function pollBatchProgress(fileId, jobId, operationName) {
+  console.log(`[Batch Polling] 🔄 Starting progress polling for file: ${fileId}`);
+  
+  const maxPolls = 300; // 25 minutes max
+  let pollCount = 0;
+  let batchCompleted = false;
+  
+  const pollInterval = setInterval(async () => {
+    try {
+      pollCount++;
+      
+      // Check file status
+      const file = await File.getFileById(fileId);
+      
+      if (!file) {
+        console.log(`[Batch Polling] ❌ File ${fileId} not found. Stopping.`);
+        clearInterval(pollInterval);
+        return;
+      }
+      
+      // Stop if moved to post-processing
+      if (file.status === "processing" || file.status === "processed") {
+        console.log(`[Batch Polling] ✅ Status: ${file.status}. Stopping poll.`);
+        clearInterval(pollInterval);
+        return;
+      }
+      
+      // Stop on error
+      if (file.status === "error") {
+        console.log(`[Batch Polling] ❌ Error detected. Stopping poll.`);
+        clearInterval(pollInterval);
+        return;
+      }
+      
+      // Check batch operation status
+      const status = await getOperationStatus(operationName);
+      
+      if (status.done && !batchCompleted) {
+        batchCompleted = true;
+        console.log(`[Batch Polling] ✅ Batch operation COMPLETED for file: ${fileId}`);
+        
+        if (status.error) {
+          console.error(`[Batch Polling] ❌ Batch failed:`, status.error.message);
+          await updateProgress(fileId, "error", 0, "Batch processing failed");
+          await ProcessingJob.updateJobStatus(jobId, "failed", status.error.message);
+          clearInterval(pollInterval);
+          return;
+        }
+        
+        // Move to post-processing at 42%
+        await updateProgress(fileId, "processing", 42.0, "OCR completed. Starting post-processing");
+        
+        const job = await ProcessingJob.getJobByFileId(fileId);
+        
+        if (!job) {
+          console.error(`[Batch Polling] ❌ Job not found for file: ${fileId}`);
+          clearInterval(pollInterval);
+          return;
+        }
+        
+        console.log(`[Batch Polling] 🚀 Triggering post-processing for file: ${fileId}`);
+        
+        // Trigger post-processing
+        processBatchResults(fileId, job).catch(err => {
+          console.error(`[Batch Polling] ❌ Post-processing error:`, err);
+        });
+        
+        clearInterval(pollInterval);
+        return;
+      }
+      
+      // ✅ IMPORTANT: Gradual progress increment during batch processing (20% -> 41.5%)
+      const currentProgress = parseFloat(file.processing_progress) || 20;
+      
+      if (file.status === "batch_processing" && currentProgress < 42) {
+        // Increment by 0.5% every 5 seconds for smooth progress
+        const newProgress = Math.min(currentProgress + 0.5, 41.5);
+        await updateProgress(fileId, "batch_processing", newProgress);
+      }
+      
+      // Stop after max attempts
+      if (pollCount >= maxPolls) {
+        console.warn(`[Batch Polling] ⚠️ Max polls reached for file: ${fileId}`);
+        await updateProgress(fileId, "error", 0, "Batch processing timeout");
+        await ProcessingJob.updateJobStatus(jobId, "failed", "Processing timeout");
+        clearInterval(pollInterval);
+      }
+      
+    } catch (error) {
+      console.error(`[Batch Polling] ❌ Error in poll #${pollCount}:`, error.message);
+      // Continue polling on error
+    }
+  }, 5000); // Poll every 5 seconds
+}
+
+// ============================================================================
+// MAIN PROCESSING FUNCTIONS
+// ============================================================================
+
+/**
+ * Initiates batch document processing (0% -> 20%)
+ */
+async function processDocumentWithAI(
+  fileId,
+  fileBuffer,
+  mimetype,
+  userId,
+  originalFilename,
+  secretId = null
+) {
   const jobId = uuidv4();
-  console.log(`[processDocumentWithAI] Starting processing for fileId: ${fileId}, jobId: ${jobId}`);
+  console.log(`\n${"=".repeat(80)}`);
+  console.log(`[START] Processing: ${originalFilename} (File ID: ${fileId})`);
+  console.log(`${"=".repeat(80)}\n`);
 
   try {
+    // STAGE 1: Initialize (0-5%)
+    await updateProgress(fileId, "batch_queued", 0, "Initializing document processing");
+    
     await ProcessingJob.createJob({
       job_id: jobId,
       file_id: fileId,
       type: "batch",
       document_ai_operation_name: null,
       status: "queued",
-      secret_id: secretId, // Pass secretId to the job
+      secret_id: secretId,
     });
-    console.log(`[processDocumentWithAI] Job ${jobId} created for file ${fileId}.`);
+    
+    await smoothProgressIncrement(fileId, "batch_queued", 1, 5, "Processing job created", 100);
 
-    await File.updateProcessingStatus(fileId, "batch_queued", 0);
-    console.log(`[processDocumentWithAI] File ${fileId} status updated to batch_queued.`);
-
+    // STAGE 2: Upload to GCS (5-15%)
+    await updateProgress(fileId, "batch_queued", 6, "Uploading to cloud storage");
+    
     const batchUploadFolder = `batch-uploads/${userId}/${uuidv4()}`;
-    const { gsUri: gcsInputUri, gcsPath: folderPath } = await uploadToGCS(
+    const { gsUri: gcsInputUri } = await uploadToGCS(
       originalFilename,
       fileBuffer,
       batchUploadFolder,
       true,
       mimetype
     );
-    console.log(`[processDocumentWithAI] File ${fileId} uploaded to GCS: ${gcsInputUri}`);
+    
+    console.log(`[Upload] Success: ${gcsInputUri}`);
+    await smoothProgressIncrement(fileId, "batch_queued", 7, 15, "Upload completed", 100);
 
+    // STAGE 3: Start batch operation (15-20%)
+    await updateProgress(fileId, "batch_processing", 16, "Initializing Document AI");
+    
     const outputPrefix = `document-ai-results/${userId}/${uuidv4()}/`;
     const gcsOutputUriPrefix = `gs://${fileOutputBucket.name}/${outputPrefix}`;
-
+    
     const operationName = await batchProcessDocument(
       [gcsInputUri],
       gcsOutputUriPrefix,
       mimetype
     );
-    console.log(`📄 Started Document AI batch operation for file ${fileId}: ${operationName}`);
-
+    
+    console.log(`[Document AI] Operation started: ${operationName}`);
+    
     await ProcessingJob.updateJob(jobId, {
       gcs_input_uri: gcsInputUri,
       gcs_output_uri_prefix: gcsOutputUriPrefix,
       document_ai_operation_name: operationName,
       status: "running",
     });
-    console.log(`[processDocumentWithAI] Job ${jobId} updated with Document AI operation name: ${operationName}.`);
-
-    await File.updateProcessingStatus(fileId, "batch_processing", 0);
-    console.log(`[processDocumentWithAI] File ${fileId} status updated to batch_processing.`);
-
+    
+    await smoothProgressIncrement(fileId, "batch_processing", 17, 20, "Batch processing started", 100);
+    
+    // Start background polling (20% -> 42%)
+    console.log(`[Info] 🚀 Starting background polling for file: ${fileId}`);
+    pollBatchProgress(fileId, jobId, operationName);
+    
+    console.log(`\n[Info] ✅ Batch processing initiated. Polling active.\n`);
+    
   } catch (err) {
-    console.error(`❌ Error processing document ${fileId} in batch:`, err.message);
-    await File.updateProcessingStatus(fileId, "error", 0);
+    console.error(`\n❌ [ERROR] Failed to process file ${fileId}:`, err.message);
+    console.error(err.stack);
+    await updateProgress(fileId, "error", 0, `Initialization failed: ${err.message}`);
     await ProcessingJob.updateJobStatus(jobId, "failed", err.message);
-    console.error(`[processDocumentWithAI] File ${fileId} status updated to error, job ${jobId} failed.`);
   }
 }
 
-exports.getFileProcessingStatus = async (req, res) => {
+/**
+ * Processes batch results after OCR completion (42% -> 100%)
+ */
+async function processBatchResults(file_id, job) {
+  console.log(`\n${"=".repeat(80)}`);
+  console.log(`[POST-PROCESSING] Starting for File ID: ${file_id}`);
+  console.log(`${"=".repeat(80)}\n`);
+
   try {
-    const { file_id } = req.params;
-    console.log(`[getFileProcessingStatus] Received request for file_id: ${file_id}`);
+    // Verify starting point
+    const currentFile = await File.getFileById(file_id);
+    console.log(`[POST-PROCESSING] Status: ${currentFile.status}, Progress: ${currentFile.processing_progress}%`);
 
-    if (!file_id) {
-      console.warn(`[getFileProcessingStatus] file_id is missing.`);
-      return res.status(400).json({ error: "file_id is required." });
-    }
-
-    const file = await File.getFileById(file_id);
-    if (!file || String(file.user_id) !== String(req.user.id)) {
-      console.warn(`[getFileProcessingStatus] Access denied or file not found for file_id: ${file_id}`);
-      return res.status(403).json({ error: "Access denied or file not found." });
-    }
-    console.log(`[getFileProcessingStatus] File ${file_id} found. Status: ${file.status}, Progress: ${file.processing_progress}`);
-
-    const job = await ProcessingJob.getJobByFileId(file_id);
-    console.log(`[getFileProcessingStatus] Job for file ${file_id}: ${job ? job.status : 'No job found'}`);
-
-    if (file.status === "processed") {
-      const existingChunks = await FileChunk.getChunksByFileId(file_id);
-      if (existingChunks && existingChunks.length > 0) {
-        console.log(`[getFileProcessingStatus] File ${file_id} already processed with ${existingChunks.length} chunks.`);
-        const formattedChunks = existingChunks.map((chunk) => ({
-          text: chunk.content,
-          metadata: {
-            page_start: chunk.page_start,
-            page_end: chunk.page_end,
-            heading: chunk.heading,
-          },
-        }));
-        return res.json({
-          file_id: file.id,
-          status: file.status,
-          processing_progress: file.processing_progress,
-          job_status: job ? job.status : "completed",
-          job_error: job ? job.error_message : null,
-          last_updated: file.updated_at,
-          chunks: formattedChunks,
-          summary: file.summary,
-        });
-      } else {
-        console.warn(`[getFileProcessingStatus] File ${file_id} is 'processed' but no chunks found in DB.`);
-      }
-    }
-
-    if (!job || !job.document_ai_operation_name) {
-      console.log(`[getFileProcessingStatus] No Document AI job or operation name for file ${file_id}.`);
-      return res.json({
-        file_id: file.id,
-        status: file.status,
-        processing_progress: file.processing_progress,
-        job_status: "not_queued",
-        job_error: null,
-        last_updated: file.updated_at,
-        chunks: [],
-        summary: file.summary,
-      });
-    }
-
-    console.log(`[getFileProcessingStatus] Checking Document AI operation status for job: ${job.document_ai_operation_name}`);
-    const status = await getOperationStatus(job.document_ai_operation_name);
-    console.log(`[getFileProcessingStatus] Document AI operation status: ${JSON.stringify(status)}`);
-
-    if (!status.done) {
-      console.log(`[getFileProcessingStatus] Document AI operation for file ${file_id} is still running.`);
-      return res.json({
-        file_id: file.id,
-        status: "batch_processing",
-        processing_progress: file.processing_progress,
-        job_status: "running",
-        job_error: null,
-        last_updated: file.updated_at,
-      });
-    }
-
-    if (status.error) {
-      console.error(`[getFileProcessingStatus] Document AI operation for file ${file_id} failed with error: ${status.error.message}`);
-      await File.updateProcessingStatus(file_id, "error", 0.0);
-      await ProcessingJob.updateJobStatus(job.job_id, "failed", status.error.message);
-      return res.status(500).json({
-        file_id: file.id,
-        status: "error",
-        processing_progress: 0.0,
-        job_status: "failed",
-        job_error: status.error.message,
-        last_updated: new Date().toISOString(),
-      });
-    }
-
+    // STAGE 1: Fetch results (42-45%)
+    await updateProgress(file_id, "processing", 42.5, "Fetching batch results");
+    
     const bucketName = fileOutputBucket.name;
     const prefix = job.gcs_output_uri_prefix.replace(`gs://${bucketName}/`, "");
-    console.log(`[getFileProcessingStatus] Fetching batch results from GCS bucket: ${bucketName}, prefix: ${prefix}`);
+    
+    await smoothProgressIncrement(file_id, "processing", 43, 44, "Retrieving processed documents", 100);
+    
     const extractedBatchTexts = await fetchBatchResults(bucketName, prefix);
-    console.log(`[getFileProcessingStatus] Extracted ${extractedBatchTexts.length} text items from batch results for file ${file_id}.`);
+    console.log(`[Extraction] ✅ Retrieved ${extractedBatchTexts.length} text segments`);
+    
+    await updateProgress(file_id, "processing", 45, "Text extraction completed");
 
-    if (!extractedBatchTexts || extractedBatchTexts.length === 0) {
-      console.error(`[getFileProcessingStatus] No meaningful text extracted from batch document for file ${file_id}.`);
-      throw new Error("Could not extract any meaningful text content from batch document.");
+    if (!extractedBatchTexts?.length || extractedBatchTexts.every(item => !item.text?.trim())) {
+      throw new Error("No text content extracted from document");
     }
 
-    await File.updateProcessingStatus(file_id, "processing", 75.0);
-    console.log(`[getFileProcessingStatus] File ${file_id} status updated to processing (75%).`);
-
-    let batchChunkingMethod = "recursive";
+    // STAGE 2: Fetch config (45-48%)
+    await updateProgress(file_id, "processing", 45.5, "Loading chunking configuration");
+    
+    let chunkingMethod = "recursive";
     try {
       const chunkMethodQuery = `
         SELECT cm.method_name
@@ -258,41 +434,54 @@ exports.getFileProcessingStatus = async (req, res) => {
         LIMIT 1;
       `;
       const result = await pool.query(chunkMethodQuery, [file_id]);
-
-      if (result.rows.length > 0) {
-        batchChunkingMethod = result.rows[0].method_name;
-        console.log(`[getFileProcessingStatus] ✅ Using chunking method from DB: ${batchChunkingMethod} for file ${file_id}.`);
-      } else {
-        console.log(`[getFileProcessingStatus] No secret_id found for file ${file_id}, using default chunking method: ${batchChunkingMethod}.`);
+      if (result.rows.length > 0 && result.rows[0].method_name) {
+        chunkingMethod = result.rows[0].method_name;
       }
     } catch (err) {
-      console.error(`[getFileProcessingStatus] Error fetching chunking method for file ${file_id}: ${err.message}`);
-      console.log(`[getFileProcessingStatus] Falling back to default chunking method: recursive for file ${file_id}.`);
+      console.warn(`[Config] Using default chunking method`);
     }
+    
+    console.log(`[Config] Chunking method: ${chunkingMethod}`);
+    await smoothProgressIncrement(file_id, "processing", 46, 48, `Configuration loaded: ${chunkingMethod}`, 100);
 
-    console.log(`[getFileProcessingStatus] Starting chunking for file ID ${file_id} using method: ${batchChunkingMethod}`);
-    const chunks = await chunkDocument(extractedBatchTexts, file_id, batchChunkingMethod);
-    console.log(`[getFileProcessingStatus] Generated ${chunks.length} chunks for file ${file_id}.`);
+    // STAGE 3: Chunk document (48-58%)
+    await updateProgress(file_id, "processing", 49, `Starting ${chunkingMethod} chunking`);
+    await smoothProgressIncrement(file_id, "processing", 50, 54, "Chunking document", 100);
+    
+    const chunks = await chunkDocument(extractedBatchTexts, file_id, chunkingMethod);
+    console.log(`[Chunking] ✅ Generated ${chunks.length} chunks`);
+    
+    await smoothProgressIncrement(file_id, "processing", 55, 58, `Created ${chunks.length} chunks`, 100);
 
     if (chunks.length === 0) {
-      console.warn(`[getFileProcessingStatus] No chunks generated for file ${file_id}. Marking as processed.`);
-      await File.updateProcessingStatus(file_id, "processed", 100.0);
+      console.warn(`[Warning] ⚠️ No chunks generated for file ${file_id}`);
+      await updateProgress(file_id, "processed", 100, "Completed (no content)");
       await ProcessingJob.updateJobStatus(job.job_id, "completed");
-      const updatedFile = await File.getFileById(file_id);
-      return res.json({
-        file_id: updatedFile.id,
-        chunks: [],
-        summary: updatedFile.summary,
-        chunking_method: batchChunkingMethod,
-      });
+      return;
     }
 
-    const chunkContents = chunks.map((c) => c.content);
-    console.log(`[getFileProcessingStatus] Generating embeddings for ${chunkContents.length} chunks for file ${file_id}.`);
+    // STAGE 4: Generate embeddings (58-76%)
+    await updateProgress(file_id, "processing", 59, "Preparing for embedding generation");
+    
+    const chunkContents = chunks.map(c => c.content);
+    console.log(`[Embeddings] 🔄 Generating for ${chunkContents.length} chunks`);
+    
+    await smoothProgressIncrement(file_id, "processing", 60, 65, "Connecting to embedding service", 100);
+    await smoothProgressIncrement(file_id, "processing", 66, 72, "Generating embeddings", 150);
+    
     const embeddings = await generateEmbeddings(chunkContents);
-    console.log(`[getFileProcessingStatus] Generated ${embeddings.length} embeddings for file ${file_id}.`);
+    console.log(`[Embeddings] ✅ Generated ${embeddings.length} embeddings`);
+    
+    await smoothProgressIncrement(file_id, "processing", 73, 76, "Embeddings completed", 100);
 
-    const chunksToSaveBatch = chunks.map((chunk, i) => ({
+    if (chunks.length !== embeddings.length) {
+      throw new Error(`Mismatch: ${chunks.length} chunks vs ${embeddings.length} embeddings`);
+    }
+
+    // STAGE 5: Save chunks (76-82%)
+    await updateProgress(file_id, "processing", 77, "Preparing database storage");
+    
+    const chunksToSave = chunks.map((chunk, i) => ({
       file_id: file_id,
       chunk_index: i,
       content: chunk.content,
@@ -301,75 +490,375 @@ exports.getFileProcessingStatus = async (req, res) => {
       page_end: chunk.metadata.page_end,
       heading: chunk.metadata.heading,
     }));
+    
+    await smoothProgressIncrement(file_id, "processing", 78, 80, "Saving chunks to database", 100);
+    
+    const savedChunks = await FileChunk.saveMultipleChunks(chunksToSave);
+    console.log(`[Database] ✅ Saved ${savedChunks.length} chunks`);
+    
+    await smoothProgressIncrement(file_id, "processing", 81, 82, `${savedChunks.length} chunks saved`, 100);
 
-    console.log(`[getFileProcessingStatus] Saving ${chunksToSaveBatch.length} chunks to DB for file ${file_id}.`);
-    const savedChunksBatch = await FileChunk.saveMultipleChunks(chunksToSaveBatch);
-    console.log(`[getFileProcessingStatus] Successfully saved ${savedChunksBatch.length} chunks to DB for file ${file_id}.`);
-
-    const vectorsToSaveBatch = savedChunksBatch.map((savedChunk) => {
-      const originalChunkIndex = savedChunk.chunk_index;
-      const embedding = embeddings[originalChunkIndex];
+    // STAGE 6: Save vectors (82-88%)
+    await updateProgress(file_id, "processing", 83, "Preparing vector storage");
+    
+    const vectorsToSave = savedChunks.map(savedChunk => {
+      const embedding = embeddings[savedChunk.chunk_index];
       return {
         chunk_id: savedChunk.id,
         embedding: embedding,
         file_id: file_id,
       };
     });
+    
+    await smoothProgressIncrement(file_id, "processing", 84, 86, "Storing vector embeddings", 100);
+    
+    await ChunkVector.saveMultipleChunkVectors(vectorsToSave);
+    console.log(`[Database] ✅ Saved ${vectorsToSave.length} vectors`);
+    
+    await smoothProgressIncrement(file_id, "processing", 87, 88, "Vectors stored", 100);
 
-    console.log(`[getFileProcessingStatus] Saving ${vectorsToSaveBatch.length} chunk vectors to DB for file ${file_id}.`);
-    await ChunkVector.saveMultipleChunkVectors(vectorsToSaveBatch);
-    console.log(`[getFileProcessingStatus] Successfully saved ${vectorsToSaveBatch.length} chunk vectors to DB for file ${file_id}.`);
-
-    await File.updateProcessingStatus(file_id, "processed", 100.0);
-    await ProcessingJob.updateJobStatus(job.job_id, "completed");
-    console.log(`[getFileProcessingStatus] File ${file_id} fully processed and job completed.`);
-
+    // STAGE 7: Generate summary (88-96%)
+    await updateProgress(file_id, "processing", 89, "Preparing summary generation");
+    
+    const fullText = chunks.map(c => c.content).join("\n\n");
     let summary = null;
+    
     try {
-      const fullTextForSummary = chunks.map((c) => c.content).join("\n\n");
-      if (fullTextForSummary.length > 0) {
-        console.log(`[getFileProcessingStatus] Generating summary for file ${file_id}.`);
-        summary = await getSummaryFromChunks(fullTextForSummary);
+      if (fullText.length > 0) {
+        await smoothProgressIncrement(file_id, "processing", 90, 93, "Generating AI summary", 150);
+        
+        summary = await getSummaryFromChunks(chunks.map(c => c.content));
         await File.updateSummary(file_id, summary);
-        console.log(`[getFileProcessingStatus] Summary generated and saved for file ${file_id}.`);
+        
+        console.log(`[Summary] ✅ Generated and saved`);
+        await smoothProgressIncrement(file_id, "processing", 94, 96, "Summary saved", 100);
+      } else {
+        await updateProgress(file_id, "processing", 96, "Summary skipped (empty content)");
       }
     } catch (summaryError) {
-      console.warn(`⚠️ Could not generate summary for file ID ${file_id}:`, summaryError.message);
+      console.warn(`⚠️ [Warning] Summary generation failed:`, summaryError.message);
+      await updateProgress(file_id, "processing", 96, "Summary skipped (error)");
     }
 
-    const updatedFile = await File.getFileById(file_id);
-    const fileChunks = await FileChunk.getChunksByFileId(file_id);
+    // STAGE 8: Finalize (96-100%)
+    await updateProgress(file_id, "processing", 97, "Updating metadata");
+    await smoothProgressIncrement(file_id, "processing", 98, 99, "Finalizing", 100);
+    
+    await updateProgress(file_id, "processed", 100, "Processing completed");
+    await ProcessingJob.updateJobStatus(job.job_id, "completed");
+    
+    console.log(`\n${"=".repeat(80)}`);
+    console.log(`✅ [COMPLETE] File ID: ${file_id} - 100%`);
+    console.log(`${"=".repeat(80)}\n`);
 
-    const formattedChunks = fileChunks.map((chunk) => ({
-      text: chunk.content,
-      metadata: {
-        page_start: chunk.page_start,
-        page_end: chunk.page_end,
-        heading: chunk.heading,
-      },
-    }));
+  } catch (error) {
+    console.error(`\n❌ [ERROR] Post-processing failed for ${file_id}:`, error.message);
+    console.error(error.stack);
+    
+    try {
+      await updateProgress(file_id, "error", 0, `Failed: ${error.message}`);
+      await ProcessingJob.updateJobStatus(job.job_id, "failed", error.message);
+    } catch (err) {
+      console.error(`❌ Failed to update error status:`, err);
+    }
+  }
+}
 
-    console.log(`[getFileProcessingStatus] Returning final status for file ${file_id}.`);
+// ============================================================================
+// STATUS API ENDPOINT - RETURNS REAL-TIME PROGRESS
+// ============================================================================
+
+/**
+ * ✅ CRITICAL: This endpoint must return FRESH data from database
+ */
+// exports.getFileProcessingStatus = async (req, res) => {
+//   try {
+//     const { file_id } = req.params;
+
+//     if (!file_id) {
+//       return res.status(400).json({ 
+//         success: false,
+//         error: "file_id is required" 
+//       });
+//     }
+
+//     // ✅ CRITICAL: Get FRESH data from database - NO CACHING
+//     const file = await File.getFileById(file_id);
+    
+//     if (!file) {
+//       return res.status(404).json({ 
+//         success: false,
+//         error: "File not found" 
+//       });
+//     }
+
+//     if (String(file.user_id) !== String(req.user.id)) {
+//       return res.status(403).json({ 
+//         success: false,
+//         error: "Access denied" 
+//       });
+//     }
+
+//     const job = await ProcessingJob.getJobByFileId(file_id);
+    
+//     // ✅ Get REAL-TIME progress from database
+//     let progress = parseFloat(file.processing_progress) || 0;
+//     let status = file.status || 'unknown';
+//     let operation = file.current_operation || getOperationName(progress, status);
+    
+//     // Round to 1 decimal place
+//     progress = Math.round(progress * 10) / 10;
+//     progress = Math.min(100, Math.max(0, progress));
+    
+//     // Log every status check
+//     console.log(`[Status API] 📊 ${file_id.substring(0, 8)}... | ${progress.toFixed(1)}% | ${status} | ${operation}`);
+
+//     // Base response
+//     const response = {
+//       success: true,
+//       file_id: file.id,
+//       filename: file.filename || file.original_filename,
+//       status: status,
+//       progress: progress,
+//       progress_percentage: `${progress.toFixed(1)}%`,
+//       current_operation: operation,
+//       job_status: job?.status || "unknown",
+//       last_updated: file.updated_at,
+//       file_size: file.file_size,
+//       mime_type: file.mime_type,
+//     };
+
+//     // CASE 1: Completed (100%)
+//     if ((status === "processed" || status === "completed") && progress >= 100) {
+//       const chunks = await FileChunk.getChunksByFileId(file_id);
+      
+//       if (chunks?.length > 0) {
+//         const formattedChunks = chunks.map(chunk => ({
+//           text: chunk.content,
+//           metadata: {
+//             page_start: chunk.page_start,
+//             page_end: chunk.page_end,
+//             heading: chunk.heading,
+//           },
+//         }));
+        
+//         return res.json({
+//           ...response,
+//           progress: 100,
+//           progress_percentage: "100%",
+//           current_operation: "Completed",
+//           is_complete: true,
+//           chunks: formattedChunks,
+//           chunk_count: chunks.length,
+//           summary: file.summary,
+//         });
+//       }
+//     }
+
+//     // CASE 2: Error
+//     if (status === "error" || status === "failed") {
+//       return res.json({
+//         ...response,
+//         progress: 0,
+//         progress_percentage: "0%",
+//         current_operation: "Failed",
+//         is_error: true,
+//         error_message: job?.error_message || operation || "Unknown error occurred",
+//       });
+//     }
+
+//     // CASE 3: Processing (42-100%)
+//     if (status === "processing") {
+//       return res.json({
+//         ...response,
+//         is_processing: true,
+//         message: "Document is being processed",
+//         estimated_time_remaining: progress < 50 ? "5-10 minutes" : 
+//                                   progress < 80 ? "2-5 minutes" : "Less than 2 minutes",
+//       });
+//     }
+
+//     // CASE 4: Batch processing (0-42%)
+//     if (status === "batch_processing") {
+//       return res.json({
+//         ...response,
+//         is_processing: true,
+//         message: "Document AI OCR is processing your document",
+//         estimated_time_remaining: progress < 30 ? "5-10 minutes" : "2-5 minutes",
+//       });
+//     }
+
+//     // CASE 5: Batch queued (0-15%)
+//     if (status === "batch_queued") {
+//       return res.json({
+//         ...response,
+//         is_processing: true,
+//         message: "Document is queued for processing",
+//         estimated_time_remaining: "Starting soon",
+//       });
+//     }
+
+//     // CASE 6: Just uploaded
+//     return res.json({
+//       ...response,
+//       progress: 0,
+//       progress_percentage: "0%",
+//       current_operation: "Queued",
+//       is_queued: true,
+//       message: "Document uploaded. Processing will begin shortly.",
+//     });
+
+//   } catch (error) {
+//     console.error("❌ [Status API] Error:", error.message);
+//     console.error(error.stack);
+    
+//     return res.status(500).json({
+//       success: false,
+//       error: "Failed to fetch processing status",
+//       message: error.message,
+//     });
+//   }
+// };
+/**
+ * Get real-time file processing status (Frontend-friendly)
+ * Smoothly reflects each stage from 0% → 100%
+ */
+exports.getFileProcessingStatus = async (req, res) => {
+  try {
+    const { file_id } = req.params;
+
+    if (!file_id) {
+      return res.status(400).json({ success: false, error: "file_id is required" });
+    }
+
+    // ✅ Always fetch fresh data from DB
+    const file = await File.getFileById(file_id);
+    if (!file) {
+      return res.status(404).json({ success: false, error: "File not found" });
+    }
+
+    // ✅ Authorization check
+    if (String(file.user_id) !== String(req.user.id)) {
+      return res.status(403).json({ success: false, error: "Access denied" });
+    }
+
+    // ✅ Get job info
+    const job = await ProcessingJob.getJobByFileId(file_id);
+    const progress = parseFloat(file.processing_progress) || 0;
+    const status = file.status || "queued";
+    const current_operation = file.current_operation || getOperationName(progress, status);
+
+    // ✅ Unified response for all stages
+    const baseResponse = {
+      success: true,
+      file_id: file.id,
+      filename: file.filename || file.originalname,
+      progress: parseFloat(progress.toFixed(1)),
+      progress_percentage: `${progress.toFixed(1)}%`,
+      status,
+      current_operation,
+      job_status: job?.status || "unknown",
+      last_updated: file.updated_at,
+      estimated_time_remaining:
+        progress < 25
+          ? "10-12 minutes"
+          : progress < 50
+          ? "6-8 minutes"
+          : progress < 75
+          ? "3-5 minutes"
+          : progress < 90
+          ? "1-2 minutes"
+          : "Few seconds",
+    };
+
+    // ✅ CASE 1: Completed
+    if ((status === "processed" || status === "completed") && progress >= 100) {
+      const chunks = await FileChunk.getChunksByFileId(file_id);
+      const formattedChunks = chunks.map((chunk) => ({
+        text: chunk.content,
+        metadata: {
+          page_start: chunk.page_start,
+          page_end: chunk.page_end,
+          heading: chunk.heading,
+        },
+      }));
+      return res.json({
+        ...baseResponse,
+        progress: 100,
+        progress_percentage: "100%",
+        current_operation: "Completed",
+        is_complete: true,
+        chunks: formattedChunks,
+        summary: file.summary,
+      });
+    }
+
+    // ✅ CASE 2: Error
+    if (status === "error" || status === "failed") {
+      return res.json({
+        ...baseResponse,
+        progress: 0,
+        progress_percentage: "0%",
+        current_operation: "Failed",
+        is_error: true,
+        error_message: job?.error_message || "Unknown error occurred",
+      });
+    }
+
+    // ✅ CASE 3: Batch queued (0-15%)
+    if (status === "batch_queued") {
+      return res.json({
+        ...baseResponse,
+        is_processing: true,
+        stage: "queued",
+        message: "Document is queued for processing",
+      });
+    }
+
+    // ✅ CASE 4: Batch processing (15-42%)
+    if (status === "batch_processing") {
+      return res.json({
+        ...baseResponse,
+        is_processing: true,
+        stage: "ocr",
+        message: "Performing OCR via Document AI",
+      });
+    }
+
+    // ✅ CASE 5: Post-processing (42-100%)
+    if (status === "processing") {
+      let stage = "processing";
+      if (progress < 45) stage = "fetching_results";
+      else if (progress < 55) stage = "chunking";
+      else if (progress < 75) stage = "embedding";
+      else if (progress < 95) stage = "summarizing";
+      else stage = "finalizing";
+
+      return res.json({
+        ...baseResponse,
+        is_processing: true,
+        stage,
+        message: `Document is in ${stage.replace("_", " ")} stage`,
+      });
+    }
+
+    // ✅ CASE 6: Just uploaded / awaiting processing
     return res.json({
-      file_id: updatedFile.id,
-      status: updatedFile.status,
-      processing_progress: updatedFile.processing_progress,
-      job_status: "completed",
-      job_error: null,
-      last_updated: updatedFile.updated_at,
-      chunks: formattedChunks,
-      summary: updatedFile.summary,
-      chunking_method: batchChunkingMethod,
+      ...baseResponse,
+      is_queued: true,
+      progress: 0,
+      current_operation: "Queued",
+      message: "Document uploaded and queued for processing",
     });
   } catch (error) {
-    console.error("❌ getFileProcessingStatus error:", error);
+    console.error("❌ [getFileProcessingStatus] Error:", error);
     return res.status(500).json({
-      error: "Failed to fetch processing status.",
+      success: false,
+      error: "Failed to fetch file processing status",
       details: error.message,
     });
   }
 };
-
 
 exports.createFolder = async (req, res) => {
   try {
@@ -1004,7 +1493,62 @@ exports.uploadDocumentsToCaseByFolderName = async (req, res) => {
   }
 };
 
+exports.deleteDocument = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { fileId } = req.params;
 
+    // 1️⃣ Validate file existence and ownership
+    const { rows } = await pool.query(
+      `SELECT * FROM user_files WHERE id = $1 AND user_id = $2 AND is_folder = false`,
+      [fileId, userId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        error: "File not found or access denied",
+        debug: { fileId, userId },
+      });
+    }
+
+    const fileRow = rows[0];
+    const gcsPath = fileRow.gcs_path;
+
+    console.log(`🗑️ Deleting file: ${fileRow.originalname} (${gcsPath})`);
+
+    // 2️⃣ Delete from Google Cloud Storage
+    const fileRef = bucket.file(gcsPath);
+    const [exists] = await fileRef.exists();
+
+    if (exists) {
+      await fileRef.delete();
+      console.log(`✅ GCS file deleted: ${gcsPath}`);
+    } else {
+      console.warn(`⚠️ File not found in GCS: ${gcsPath}`);
+    }
+
+    // 3️⃣ Delete from database
+    await pool.query(`DELETE FROM user_files WHERE id = $1`, [fileId]);
+    console.log(`✅ DB record deleted for file ID: ${fileId}`);
+
+    // 4️⃣ Response
+    return res.status(200).json({
+      message: "File deleted successfully",
+      deletedFile: {
+        id: fileId,
+        originalname: fileRow.originalname,
+        folder_path: fileRow.folder_path,
+        gcs_path: gcsPath,
+      },
+    });
+  } catch (error) {
+    console.error("❌ deleteDocument error:", error);
+    return res.status(500).json({
+      error: "Internal server error",
+      details: error.message,
+    });
+  }
+};
 /* ----------------- Enhanced Folder Summary ----------------- */
 exports.getFolderSummary = async (req, res) => {
   const userId = req.user.id;
@@ -1547,9 +2091,9 @@ exports.getFileProcessingStatus = async (req, res) => {
 
     let summary = null;
     try {
-      const fullTextForSummary = chunks.map((c) => c.content).join("\n\n");
-      if (fullTextForSummary.length > 0) {
-        summary = await getSummaryFromChunks(fullTextForSummary);
+      if (chunks.length > 0) {
+        // FIX: Pass the array of chunk objects directly to the summary function
+        summary = await getSummaryFromChunks(chunks);
         await File.updateSummary(file_id, summary);
       }
     } catch (summaryError) {
@@ -2124,87 +2668,7 @@ exports.getDocumentsInFolder = async (req, res) => {
   }
 };
 
-/* ---------------------- Get All Cases for User ---------------------- */
-// exports.getAllCases = async (req, res) => {
-//   try {
-//     const userId = parseInt(req.user?.id);
-//     if (!userId) {
-//       return res.status(401).json({ error: "Unauthorized user" });
-//     }
 
-//     const getAllCasesQuery = `
-//       SELECT
-//         c.*,
-//         ct.name as case_type_name,
-//         st.name as sub_type_name,
-//         co.name as court_name_name
-//       FROM cases c
-//       LEFT JOIN case_types ct ON c.case_type::integer = ct.id
-//       LEFT JOIN sub_types st ON c.sub_type::integer = st.id
-//       LEFT JOIN courts co ON c.court_name::integer = co.id
-//       WHERE c.user_id = $1
-//       ORDER BY c.created_at DESC;
-//     `;
-//     const { rows: cases } = await pool.query(getAllCasesQuery, [userId]);
-
-//     // Parse JSON fields for each case
-//     const formattedCases = cases.map(caseData => {
-//       // Replace IDs with names
-//       caseData.case_type = caseData.case_type_name;
-//       caseData.sub_type = caseData.sub_type_name;
-//       caseData.court_name = caseData.court_name_name;
-
-//       // Remove the now redundant name fields
-//       delete caseData.case_type_name;
-//       delete caseData.sub_type_name;
-//       delete caseData.court_name_name;
-
-//       try {
-//         if (typeof caseData.judges === 'string' && caseData.judges.trim() !== '') {
-//           caseData.judges = JSON.parse(caseData.judges);
-//         } else if (caseData.judges === null) {
-//           caseData.judges = []; // Default to empty array if null
-//         }
-//       } catch (e) {
-//         console.warn(`⚠️ Could not parse judges JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.judges}`);
-//         caseData.judges = []; // Fallback to empty array on error
-//       }
-//       try {
-//         if (typeof caseData.petitioners === 'string' && caseData.petitioners.trim() !== '') {
-//           caseData.petitioners = JSON.parse(caseData.petitioners);
-//         } else if (caseData.petitioners === null) {
-//           caseData.petitioners = []; // Default to empty array if null
-//         }
-//       } catch (e) {
-//         console.warn(`⚠️ Could not parse petitioners JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.petitioners}`);
-//         caseData.petitioners = []; // Fallback to empty array on error
-//       }
-//       try {
-//         if (typeof caseData.respondents === 'string' && caseData.respondents.trim() !== '') {
-//           caseData.respondents = JSON.parse(caseData.respondents);
-//         } else if (caseData.respondents === null) {
-//           caseData.respondents = []; // Default to empty array if null
-//         }
-//       } catch (e) {
-//         console.warn(`⚠️ Could not parse respondents JSON for case ${caseData.id}: ${e.message}. Value: ${caseData.respondents}`);
-//         caseData.respondents = []; // Fallback to empty array on error
-//       }
-//       return caseData;
-//     });
-
-//     return res.status(200).json({
-//       message: "Cases fetched successfully.",
-//       cases: formattedCases,
-//       totalCases: formattedCases.length,
-//     });
-//   } catch (error) {
-//     console.error("❌ Error fetching all cases:", error);
-//     res.status(500).json({
-//       error: "Internal server error",
-//       details: error.message,
-//     });
-//   }
-// };
 
 /* ---------------------- Get All Cases for User (FIXED) ---------------------- */
 exports.getAllCases = async (req, res) => {
