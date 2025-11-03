@@ -5,7 +5,7 @@ const router = express.Router();
 // const auth = require('../middleware/auth'); // Import auth middleware
 const { protect } = require('../middleware/auth');
 
-const { register, login, verifyOtpAndLogin, updateProfile, deleteAccount, logout, fetchProfile, getUserById, updateRazorpayCustomerId } = require('../controllers/authController');
+const { register, login, verifyOtpAndLogin, updateProfile, deleteAccount, logout, fetchProfile, getUserById, updateRazorpayCustomerId , firebaseGoogleSignIn } = require('../controllers/authController');
 
 // Register a new user
 router.post('/register', register);
@@ -35,5 +35,7 @@ router.get('/users/:userId', protect, getUserById);
 
 // Update Razorpay customer ID
 router.put('/users/:id/razorpay-customer-id', protect, updateRazorpayCustomerId);
+
+router.post('/google', firebaseGoogleSignIn);
 
 module.exports = router;
