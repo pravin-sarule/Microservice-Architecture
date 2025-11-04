@@ -1266,6 +1266,8 @@ exports.chatWithDocument = async (req, res) => {
       res.write(`data: ${JSON.stringify({ text })}\n\n`);
     }
 
+    console.log(`[chatWithDocumentStream] Full response length: ${fullResponse.length} characters`);
+
     // ---------- SAVE CHAT ----------
     const savedChat = await FileChat.saveChat(
       file_id,
@@ -1307,13 +1309,14 @@ exports.chatWithDocument = async (req, res) => {
     }));
 
     // ---------- FINALIZE ----------
+    // Do NOT include 'answer: fullResponse' here, as the client should assemble it from chunks.
+    // This reduces the size of the final message and potential client-side parsing issues.
     res.write(
       `data: ${JSON.stringify({
         done: true,
         success: true,
         session_id: finalSessionId,
         message_id: savedChat.id,
-        answer: fullResponse,
         history,
         used_chunk_ids: usedChunkIds,
         confidence: used_secret_prompt ? 0.9 : 0.85,

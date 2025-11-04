@@ -271,14 +271,14 @@ async function callSinglePrompt(provider, prompt, context = '') {
   const payload = isClaude
     ? {
         model: config.model,
-        max_tokens: 2048, // ✅ REDUCED from 4096
+        max_tokens: 4096, // Increased to allow larger responses
         system: context,
         messages,
       }
     : {
         model: config.model,
         messages,
-        max_tokens: 2048, // ✅ REDUCED from 4096
+        max_tokens: 4096, // Increased to allow larger responses
         temperature: 0.5,
       };
 
