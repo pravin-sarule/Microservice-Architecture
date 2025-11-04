@@ -582,6 +582,7 @@ const triggerAskLlmForFolder = async (req, res) => {
       llmResponse,
       finalSessionId,
       summarizedFileIds,
+      allChunks.map((c) => c.id), // usedChunkIds
       true, // used_secret_prompt = true
       secretName, // prompt_label
       secretId

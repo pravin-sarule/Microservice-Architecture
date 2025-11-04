@@ -4007,6 +4007,44 @@ class TokenUsageService {
 
         const tokenRenewInterval = userPlan.token_renew_interval_hours || DEFAULT_TOKEN_RENEWAL_INTERVAL_HOURS;
 
+        if (userUsage.last_token_grant) {
+            const lastGrantUTC = moment.utc(userUsage.last_token_grant);
+            const nextRenewUTC = lastGrantUTC.clone().add(tokenRenewInterval, 'hours');
+
+            if (nowUTC.isSameOrAfter(nextRenewUTC)) {
+                await this.resetTokens(userId);
+                // After resetting, we need to re-fetch the usage to get the correct available tokens
+                const refreshedUsageRes = await pool.query('SELECT * FROM user_usage WHERE user_id = $1', [userId]);
+                const refreshedUsage = refreshedUsageRes.rows[0];
+                const refreshedAvailableTokens = userPlan.token_limit + (refreshedUsage.carry_over_tokens || 0) - refreshedUsage.tokens_used;
+
+                if (requestedTokens > refreshedAvailableTokens) {
+                    return {
+                        allowed: false,
+                        message: `Tokens just renewed, but you still don't have enough for this action.`,
+                        remainingTokens: refreshedAvailableTokens
+                    };
+                }
+
+                return {
+                    allowed: true,
+                    message: `Tokens renewed at ${nowIST.format('DD-MM-YYYY hh:mm A')} IST`
+                };
+            } else {
+                const remaining = moment.duration(nextRenewUTC.diff(nowUTC));
+                return {
+                    allowed: false,
+                    message: `Tokens exhausted. Wait ${Math.floor(remaining.asHours())}h ${remaining.minutes()}m ${remaining.seconds()}s for renewal at ${nextRenewUTC.clone().tz(TIMEZONE).format('DD-MM-YYYY hh:mm A')} IST`,
+                    nextRenewalTime: nextRenewUTC.clone().tz(TIMEZONE).format('DD-MM-YYYY hh:mm A'),
+                    remainingTime: {
+                        hours: Math.floor(remaining.asHours()),
+                        minutes: remaining.minutes(),
+                        seconds: remaining.seconds()
+                    }
+                };
+            }
+        }
+
         // 1️⃣ If requested tokens exceed available → start cooldown
         if (requestedTokens > availableTokens) {
             const exhaustionUTC = nowUTC.toISOString();
