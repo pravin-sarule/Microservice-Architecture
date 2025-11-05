@@ -30,7 +30,7 @@ function trimContext(context, maxTokens = 500) {
 // ---------------------------
 // Smart Chunk Filtering - REDUCES CHUNKS BY 80%
 // ---------------------------
-function filterRelevantChunks(chunks, userMessage, maxChunks = 3) {
+function filterRelevantChunks(chunks, userMessage, maxChunks = 5) {
   if (!chunks) return '';
   
   const chunkArray = chunks.split('\n\n').filter(Boolean);
@@ -215,16 +215,19 @@ async function askLLM(providerName, userMessage, context = '', relevant_chunks =
   const trimmedContext = trimContext(safeContext, 200);
   
   // ✅ OPTIMIZATION 2: Filter only top 1 most relevant chunks
-  const filteredChunks = filterRelevantChunks(relevant_chunks, userMessage, 1);
+  const filteredChunks = filterRelevantChunks(relevant_chunks, userMessage, 5);
   
-  // ✅ OPTIMIZATION 3: Build minimal prompt
+  // ✅ OPTIMIZATION 3: Trim filtered chunks to reduce token count further
+  const trimmedFilteredChunks = trimContext(filteredChunks, 700); // Limit chunk content to 700 tokens
+  
+  // ✅ OPTIMIZATION 4: Build minimal prompt
   let prompt = userMessage.trim();
-  if (filteredChunks) {
-    prompt += `\n\nRelevant Context:\n${filteredChunks}`;
+  if (trimmedFilteredChunks) {
+    prompt += `\n\nRelevant Context:\n${trimmedFilteredChunks}`;
   }
 
   const totalTokens = estimateTokenCount(prompt + trimmedContext);
-  console.log(`[askLLM] Optimized Tokens: ${totalTokens} (context: ${estimateTokenCount(trimmedContext)}, chunks: ${estimateTokenCount(filteredChunks || '')})`);
+  console.log(`[askLLM] Optimized Tokens: ${totalTokens} (context: ${estimateTokenCount(trimmedContext)}, chunks: ${estimateTokenCount(trimmedFilteredChunks || '')})`);
 
   // ✅ OPTIMIZATION 4: Single request only (no chunking - saves massive tokens)
   return await retryWithBackoff(() => callSinglePrompt(provider, prompt, trimmedContext));

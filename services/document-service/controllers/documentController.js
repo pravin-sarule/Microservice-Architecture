@@ -1148,6 +1148,745 @@ exports.getSummary = async (req, res) => {
  }
 };
 // controllers/chatController.js
+// exports.chatWithDocument = async (req, res) => {
+//   let userId = null;
+
+//   try {
+//     const {
+//       file_id,
+//       question,
+//       used_secret_prompt = false,
+//       prompt_label = null,
+//       session_id = null,
+//       secret_id,
+//       llm_name,
+//       additional_input = '',
+//     } = req.body;
+
+//     userId = req.user.id;
+
+//     // ---------- VALIDATION ----------
+//     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+//     if (!file_id) return res.status(400).json({ error: 'file_id is required.' });
+//     if (!uuidRegex.test(file_id)) return res.status(400).json({ error: 'Invalid file ID format.' });
+
+//     const finalSessionId = session_id || `session-${Date.now()}`;
+
+//     // ---------- SSE HEADERS ----------
+//     res.setHeader('Content-Type', 'text/event-stream');
+//     res.setHeader('Cache-Control', 'no-cache');
+//     res.setHeader('Connection', 'keep-alive');
+//     res.flushHeaders();
+
+//     console.log(
+//       `[chatWithDocumentStream] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}`
+//     );
+
+//     // ---------- FILE ACCESS ----------
+//     const file = await DocumentModel.getFileById(file_id);
+//     if (!file) return res.write(`data: ${JSON.stringify({ error: 'File not found.' })}\n\n`);
+//     if (String(file.user_id) !== String(userId))
+//       return res.write(`data: ${JSON.stringify({ error: 'Access denied.' })}\n\n`);
+//     if (file.status !== 'processed')
+//       return res.write(
+//         `data: ${JSON.stringify({
+//           error: 'Document is not yet processed.',
+//           status: file.status,
+//           progress: file.processing_progress,
+//         })}\n\n`
+//       );
+
+//     // ---------- PROMPT BUILDING ----------
+//     let usedChunkIds = [];
+//     let storedQuestion;
+//     let finalPromptLabel = prompt_label;
+//     let provider = 'gemini';
+//     let finalPrompt = '';
+
+//     if (used_secret_prompt) {
+//       if (!secret_id)
+//         return res.write(`data: ${JSON.stringify({ error: 'secret_id required.' })}\n\n`);
+
+//       const secretQuery = `
+//         SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
+//         FROM secret_manager s
+//         LEFT JOIN llm_models l ON s.llm_id = l.id
+//         WHERE s.id = $1`;
+//       const secretResult = await db.query(secretQuery, [secret_id]);
+//       if (!secretResult.rows.length)
+//         return res.write(`data: ${JSON.stringify({ error: 'Secret configuration not found.' })}\n\n`);
+
+//       const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } =
+//         secretResult.rows[0];
+//       finalPromptLabel = secretName;
+//       provider = resolveProviderName(llm_name || dbLlmName || 'gemini');
+
+//       const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
+//       const client = new SecretManagerServiceClient();
+//       const GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
+//       const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
+//       const [accessResponse] = await client.accessSecretVersion({ name: gcpSecretName });
+//       const secretValue = accessResponse.payload.data.toString('utf8');
+
+//       const chunks = await FileChunkModel.getChunksByFileId(file_id);
+//       usedChunkIds = chunks.map((c) => c.id);
+//       const docContent = chunks.map((c) => c.content).join('\n\n');
+
+//       finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${docContent}`;
+//       if (additional_input?.trim())
+//         finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additional_input.trim()}`;
+
+//       storedQuestion = secretName;
+//     } else {
+//       if (!question?.trim())
+//         return res.write(`data: ${JSON.stringify({ error: 'question is required.' })}\n\n`);
+
+//       provider = 'gemini';
+//       const questionEmbedding = await generateEmbedding(question);
+//       const relevantChunks = await ChunkVectorModel.findNearestChunks(questionEmbedding, 5, file_id);
+//       const relevantTexts = relevantChunks.map((c) => c.content);
+//       usedChunkIds = relevantChunks.map((c) => c.chunk_id);
+
+//       if (!relevantTexts.length) {
+//         const all = await FileChunkModel.getChunksByFileId(file_id);
+//         finalPrompt = `${question}\n\nContext:\n${all.map((c) => c.content).join('\n\n')}`;
+//       } else {
+//         finalPrompt = `${question}\n\nContext:\n${relevantTexts.join('\n\n')}`;
+//       }
+//       storedQuestion = question;
+//     }
+
+//     // ---------- STREAM FROM LLM ----------
+//     const stream = await askLLM(provider, finalPrompt, { stream: true });
+//     let fullResponse = '';
+
+//     for await (const chunk of stream) {
+//       const text = chunk?.text || chunk;
+//       fullResponse += text;
+//       res.write(`data: ${JSON.stringify({ text })}\n\n`);
+//     }
+
+//     console.log(`[chatWithDocumentStream] Full response length: ${fullResponse.length} characters`);
+
+//     // ---------- SAVE CHAT ----------
+//     const savedChat = await FileChat.saveChat(
+//       file_id,
+//       userId,
+//       storedQuestion,
+//       fullResponse,
+//       finalSessionId,
+//       usedChunkIds,
+//       used_secret_prompt,
+//       finalPromptLabel,
+//       used_secret_prompt ? secret_id : null
+//     );
+
+//     // ---------- TOKEN USAGE ----------
+//     try {
+//       const { userUsage, userPlan, requestedResources } = req;
+//       await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
+//     } catch (e) {
+//       console.warn('Token usage increment failed:', e.message);
+//     }
+
+//     // ---------- HISTORY ----------
+//     const historyRows = await FileChat.getChatHistory(file_id, finalSessionId);
+//     const history = historyRows.map((row) => ({
+//       id: row.id,
+//       file_id: row.file_id,
+//       session_id: row.session_id,
+//       question: row.question,
+//       answer: row.answer,
+//       used_secret_prompt: row.used_secret_prompt || false,
+//       prompt_label: row.prompt_label || null,
+//       secret_id: row.secret_id || null,
+//       used_chunk_ids: row.used_chunk_ids || [],
+//       confidence: row.confidence || 0.8,
+//       timestamp: row.created_at || row.timestamp,
+//       display_text_left_panel: row.used_secret_prompt
+//         ? `Analysis: ${row.prompt_label || 'Secret Prompt'}`
+//         : row.question,
+//     }));
+
+//     // ---------- FINALIZE ----------
+//     // Do NOT include 'answer: fullResponse' here, as the client should assemble it from chunks.
+//     // This reduces the size of the final message and potential client-side parsing issues.
+//     res.write(
+//       `data: ${JSON.stringify({
+//         done: true,
+//         success: true,
+//         session_id: finalSessionId,
+//         message_id: savedChat.id,
+//         history,
+//         used_chunk_ids: usedChunkIds,
+//         confidence: used_secret_prompt ? 0.9 : 0.85,
+//         timestamp: savedChat.created_at || new Date().toISOString(),
+//         llm_provider: provider,
+//         used_secret_prompt,
+//       })}\n\n`
+//     );
+//     res.write(`data: [DONE]\n\n`);
+//     res.end();
+//   } catch (error) {
+//     console.error('❌ Error in chatWithDocument (streaming):', error);
+//     res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+//     res.end();
+//   }
+// };
+
+// exports.chatWithDocument = async (req, res) => {
+//   let userId = null;
+
+//   try {
+//     const {
+//       file_id,
+//       question,
+//       used_secret_prompt = false,
+//       prompt_label = null,
+//       session_id = null,
+//       secret_id,
+//       llm_name,
+//       additional_input = '',
+//     } = req.body;
+
+//     userId = req.user.id;
+
+//     // ---------- VALIDATION ----------
+//     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+//     if (!file_id) return res.status(400).json({ error: 'file_id is required.' });
+//     if (!uuidRegex.test(file_id)) return res.status(400).json({ error: 'Invalid file ID format.' });
+
+//     const finalSessionId = session_id || `session-${Date.now()}`;
+
+//     // ---------- SSE HEADERS ----------
+//     res.setHeader('Content-Type', 'text/event-stream');
+//     res.setHeader('Cache-Control', 'no-cache');
+//     res.setHeader('Connection', 'keep-alive');
+//     res.flushHeaders();
+
+//     console.log(
+//       `[chatWithDocumentStream] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}`
+//     );
+
+//     // ---------- FILE ACCESS ----------
+//     const file = await DocumentModel.getFileById(file_id);
+//     if (!file) return res.write(`data: ${JSON.stringify({ error: 'File not found.' })}\n\n`);
+//     if (String(file.user_id) !== String(userId))
+//       return res.write(`data: ${JSON.stringify({ error: 'Access denied.' })}\n\n`);
+//     if (file.status !== 'processed')
+//       return res.write(
+//         `data: ${JSON.stringify({
+//           error: 'Document is not yet processed.',
+//           status: file.status,
+//           progress: file.processing_progress,
+//         })}\n\n`
+//       );
+
+//     // ---------- PROMPT BUILDING ----------
+//     let usedChunkIds = [];
+//     let storedQuestion;
+//     let finalPromptLabel = prompt_label;
+//     let provider = 'gemini';
+//     let finalPrompt = '';
+
+//     if (used_secret_prompt) {
+//       if (!secret_id)
+//         return res.write(`data: ${JSON.stringify({ error: 'secret_id required.' })}\n\n`);
+
+//       const secretQuery = `
+//         SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
+//         FROM secret_manager s
+//         LEFT JOIN llm_models l ON s.llm_id = l.id
+//         WHERE s.id = $1`;
+//       const secretResult = await db.query(secretQuery, [secret_id]);
+//       if (!secretResult.rows.length)
+//         return res.write(`data: ${JSON.stringify({ error: 'Secret configuration not found.' })}\n\n`);
+
+//       const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } =
+//         secretResult.rows[0];
+//       finalPromptLabel = secretName;
+//       provider = resolveProviderName(llm_name || dbLlmName || 'gemini');
+
+//       const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
+//       const client = new SecretManagerServiceClient();
+//       const GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
+//       const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
+//       const [accessResponse] = await client.accessSecretVersion({ name: gcpSecretName });
+//       const secretValue = accessResponse.payload.data.toString('utf8');
+
+//       const chunks = await FileChunkModel.getChunksByFileId(file_id);
+//       usedChunkIds = chunks.map((c) => c.id);
+//       const docContent = chunks.map((c) => c.content).join('\n\n');
+
+//       finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${docContent}`;
+//       if (additional_input?.trim())
+//         finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additional_input.trim()}`;
+
+//       storedQuestion = secretName;
+//     } else {
+//       if (!question?.trim())
+//         return res.write(`data: ${JSON.stringify({ error: 'question is required.' })}\n\n`);
+
+//       provider = 'gemini';
+//       const questionEmbedding = await generateEmbedding(question);
+//       const relevantChunks = await ChunkVectorModel.findNearestChunks(questionEmbedding, 5, file_id);
+//       const relevantTexts = relevantChunks.map((c) => c.content);
+//       usedChunkIds = relevantChunks.map((c) => c.chunk_id);
+
+//       if (!relevantTexts.length) {
+//         const all = await FileChunkModel.getChunksByFileId(file_id);
+//         finalPrompt = `${question}\n\nContext:\n${all.map((c) => c.content).join('\n\n')}`;
+//       } else {
+//         finalPrompt = `${question}\n\nContext:\n${relevantTexts.join('\n\n')}`;
+//       }
+//       storedQuestion = question;
+//     }
+
+//     // ---------- STREAM FROM LLM ----------
+//     const stream = await askLLM(provider, finalPrompt, { stream: true });
+//     let fullResponse = '';
+
+//     for await (const chunk of stream) {
+//       const text = chunk?.text || chunk;
+//       fullResponse += text;
+//       res.write(`data: ${JSON.stringify({ text })}\n\n`);
+//     }
+
+//     // ---------- SAVE CHAT ----------
+//     const savedChat = await FileChat.saveChat(
+//       file_id,
+//       userId,
+//       storedQuestion,
+//       fullResponse,
+//       finalSessionId,
+//       usedChunkIds,
+//       used_secret_prompt,
+//       finalPromptLabel,
+//       used_secret_prompt ? secret_id : null
+//     );
+
+//     // ---------- TOKEN USAGE ----------
+//     try {
+//       const { userUsage, userPlan, requestedResources } = req;
+//       await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
+//     } catch (e) {
+//       console.warn('Token usage increment failed:', e.message);
+//     }
+
+//     // ---------- HISTORY ----------
+//     const historyRows = await FileChat.getChatHistory(file_id, finalSessionId);
+//     const history = historyRows.map((row) => ({
+//       id: row.id,
+//       file_id: row.file_id,
+//       session_id: row.session_id,
+//       question: row.question,
+//       answer: row.answer,
+//       used_secret_prompt: row.used_secret_prompt || false,
+//       prompt_label: row.prompt_label || null,
+//       secret_id: row.secret_id || null,
+//       used_chunk_ids: row.used_chunk_ids || [],
+//       confidence: row.confidence || 0.8,
+//       timestamp: row.created_at || row.timestamp,
+//       display_text_left_panel: row.used_secret_prompt
+//         ? `Analysis: ${row.prompt_label || 'Secret Prompt'}`
+//         : row.question,
+//     }));
+
+//     // ---------- FINALIZE ----------
+//     res.write(
+//       `data: ${JSON.stringify({
+//         done: true,
+//         success: true,
+//         session_id: finalSessionId,
+//         message_id: savedChat.id,
+//         answer: fullResponse,
+//         history,
+//         used_chunk_ids: usedChunkIds,
+//         confidence: used_secret_prompt ? 0.9 : 0.85,
+//         timestamp: savedChat.created_at || new Date().toISOString(),
+//         llm_provider: provider,
+//         used_secret_prompt,
+//       })}\n\n`
+//     );
+//     res.write(`data: [DONE]\n\n`);
+//     res.end();
+//   } catch (error) {
+//     console.error('❌ Error in chatWithDocument (streaming):', error);
+//     res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+//     res.end();
+//   }
+// };
+// exports.chatWithDocument = async (req, res) => {
+//   let userId = null;
+
+//   try {
+//     const {
+//       file_id,
+//       question,
+//       used_secret_prompt = false,
+//       prompt_label = null,
+//       session_id = null,
+//       secret_id,
+//       llm_name,
+//       additional_input = '',
+//     } = req.body;
+
+//     userId = req.user.id;
+
+//     // ---------- VALIDATION ----------
+//     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+//     if (!file_id) {
+//       return res.status(400).json({ error: 'file_id is required.' });
+//     }
+//     if (!uuidRegex.test(file_id)) {
+//       return res.status(400).json({ error: 'Invalid file ID format.' });
+//     }
+
+//     const finalSessionId = session_id || `session-${Date.now()}`;
+
+//     console.log(
+//       `[chatWithDocument] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}`
+//     );
+
+//     // ---------- FILE ACCESS ----------
+//     const file = await DocumentModel.getFileById(file_id);
+//     if (!file) {
+//       return res.status(404).json({ error: 'File not found.' });
+//     }
+//     if (String(file.user_id) !== String(userId)) {
+//       return res.status(403).json({ error: 'Access denied.' });
+//     }
+//     if (file.status !== 'processed') {
+//       return res.status(400).json({
+//         error: 'Document is not yet processed.',
+//         status: file.status,
+//         progress: file.processing_progress,
+//       });
+//     }
+
+//     // ---------- PROMPT BUILDING ----------
+//     let usedChunkIds = [];
+//     let storedQuestion;
+//     let finalPromptLabel = prompt_label;
+//     let provider = 'gemini';
+//     let finalPrompt = '';
+
+//     if (used_secret_prompt) {
+//       if (!secret_id) {
+//         return res.status(400).json({ error: 'secret_id required.' });
+//       }
+
+//       const secretQuery = `
+//         SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
+//         FROM secret_manager s
+//         LEFT JOIN llm_models l ON s.llm_id = l.id
+//         WHERE s.id = $1`;
+//       const secretResult = await db.query(secretQuery, [secret_id]);
+//       if (!secretResult.rows.length) {
+//         return res.status(404).json({ error: 'Secret configuration not found.' });
+//       }
+
+//       const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } =
+//         secretResult.rows[0];
+//       finalPromptLabel = secretName;
+//       provider = resolveProviderName(llm_name || dbLlmName || 'gemini');
+
+//       const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
+//       const client = new SecretManagerServiceClient();
+//       const GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
+//       const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
+//       const [accessResponse] = await client.accessSecretVersion({ name: gcpSecretName });
+//       const secretValue = accessResponse.payload.data.toString('utf8');
+
+//       const chunks = await FileChunkModel.getChunksByFileId(file_id);
+//       usedChunkIds = chunks.map((c) => c.id);
+//       const docContent = chunks.map((c) => c.content).join('\n\n');
+
+//       finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${docContent}`;
+//       if (additional_input?.trim())
+//         finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additional_input.trim()}`;
+
+//       storedQuestion = secretName;
+//     } else {
+//       if (!question?.trim()) {
+//         return res.status(400).json({ error: 'question is required.' });
+//       }
+
+//       provider = 'gemini';
+//       const questionEmbedding = await generateEmbedding(question);
+//       const relevantChunks = await ChunkVectorModel.findNearestChunks(questionEmbedding, 5, file_id);
+//       const relevantTexts = relevantChunks.map((c) => c.content);
+//       usedChunkIds = relevantChunks.map((c) => c.chunk_id);
+
+//       if (!relevantTexts.length) {
+//         const all = await FileChunkModel.getChunksByFileId(file_id);
+//         finalPrompt = `${question}\n\nContext:\n${all.map((c) => c.content).join('\n\n')}`;
+//       } else {
+//         finalPrompt = `${question}\n\nContext:\n${relevantTexts.join('\n\n')}`;
+//       }
+//     } // Closing brace for the else block
+
+//     // ---------- GET RESPONSE FROM LLM (WITHOUT STREAMING) ----------
+//     console.log(`[chatWithDocument] Calling LLM provider: ${provider}`);
+    
+//     // Call askLLM without stream option to get complete response
+//     const answer = await askLLM(provider, finalPrompt, { stream: false });
+
+//     if (!answer || !answer.trim()) {
+//       return res.status(500).json({ error: 'Empty response from AI.' });
+//     }
+
+//     console.log(`[chatWithDocument] Received answer, length: ${answer.length} characters`);
+
+//     // ---------- SAVE CHAT ----------
+//     const savedChat = await FileChat.saveChat(
+//       file_id,
+//       userId,
+//       storedQuestion,
+//       answer,
+//       finalSessionId,
+//       usedChunkIds,
+//       used_secret_prompt,
+//       finalPromptLabel,
+//       used_secret_prompt ? secret_id : null
+//     );
+
+//     console.log(`[chatWithDocument] Chat saved with ID: ${savedChat.id}`);
+
+//     // ---------- TOKEN USAGE ----------
+//     try {
+//       const { userUsage, userPlan, requestedResources } = req;
+//       await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
+//     } catch (e) {
+//       console.warn('Token usage increment failed:', e.message);
+//     }
+
+//     // ---------- FETCH HISTORY ----------
+//     const historyRows = await FileChat.getChatHistory(file_id, finalSessionId);
+//     const history = historyRows.map((row) => ({
+//       id: row.id,
+//       file_id: row.file_id,
+//       session_id: row.session_id,
+//       question: row.question,
+//       answer: row.answer,
+//       used_secret_prompt: row.used_secret_prompt || false,
+//       prompt_label: row.prompt_label || null,
+//       secret_id: row.secret_id || null,
+//       used_chunk_ids: row.used_chunk_ids || [],
+//       confidence: row.confidence || 0.8,
+//       timestamp: row.created_at || row.timestamp,
+//       display_text_left_panel: row.used_secret_prompt
+//         ? `Analysis: ${row.prompt_label || 'Secret Prompt'}`
+//         : row.question,
+//     }));
+
+//     // ---------- RETURN COMPLETE RESPONSE ----------
+//     return res.status(200).json({
+//       success: true,
+//       session_id: finalSessionId,
+//       message_id: savedChat.id,
+//       answer: answer,
+//       response: answer,
+//       history: history,
+//       used_chunk_ids: usedChunkIds,
+//       confidence: used_secret_prompt ? 0.9 : 0.85,
+//       timestamp: savedChat.created_at || new Date().toISOString(),
+//       llm_provider: provider,
+//       used_secret_prompt: used_secret_prompt,
+//     });
+
+//   } catch (error) {
+//     console.error('❌ Error in chatWithDocument:', error);
+//     console.error('Stack trace:', error.stack);
+//     return res.status(500).json({
+//       error: 'Failed to get AI answer.',
+//       details: error.message,
+//     });
+//   }
+// }; // Closing brace for exports.chatWithDocument
+// exports.chatWithDocument = async (req, res) => {
+//   let userId = null;
+
+//   try {
+//     const {
+//       file_id,
+//       question,
+//       used_secret_prompt = false,
+//       prompt_label = null,
+//       session_id = null,
+//       secret_id,
+//       llm_name,
+//       additional_input = '',
+//     } = req.body;
+
+//     userId = req.user.id;
+
+//     // ---------- VALIDATION ----------
+//     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+//     if (!file_id) return res.status(400).json({ error: 'file_id is required.' });
+//     if (!uuidRegex.test(file_id)) return res.status(400).json({ error: 'Invalid file ID format.' });
+
+//     const finalSessionId = session_id || `session-${Date.now()}`;
+
+//     console.log(
+//       `[chatWithDocument] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}`
+//     );
+
+//     // ---------- FILE ACCESS ----------
+//     const file = await DocumentModel.getFileById(file_id);
+//     if (!file) return res.status(404).json({ error: 'File not found.' });
+//     if (String(file.user_id) !== String(userId))
+//       return res.status(403).json({ error: 'Access denied.' });
+//     if (file.status !== 'processed') {
+//       return res.status(400).json({
+//         error: 'Document is not yet processed.',
+//         status: file.status,
+//         progress: file.processing_progress,
+//       });
+//     }
+
+//     // ---------- PROMPT BUILDING ----------
+//     let usedChunkIds = [];
+//     let storedQuestion = null;
+//     let finalPromptLabel = prompt_label;
+//     let provider = 'gemini';
+//     let finalPrompt = '';
+
+//     if (used_secret_prompt) {
+//       if (!secret_id)
+//         return res.status(400).json({ error: 'secret_id required for secret prompt.' });
+
+//       const secretQuery = `
+//         SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
+//         FROM secret_manager s
+//         LEFT JOIN llm_models l ON s.llm_id = l.id
+//         WHERE s.id = $1`;
+//       const secretResult = await db.query(secretQuery, [secret_id]);
+//       if (!secretResult.rows.length)
+//         return res.status(404).json({ error: 'Secret configuration not found.' });
+
+//       const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } =
+//         secretResult.rows[0];
+//       finalPromptLabel = secretName;
+//       provider = resolveProviderName(llm_name || dbLlmName || 'gemini');
+
+//       const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
+//       const client = new SecretManagerServiceClient();
+//       const GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
+//       const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
+//       const [accessResponse] = await client.accessSecretVersion({ name: gcpSecretName });
+//       const secretValue = accessResponse.payload.data.toString('utf8');
+
+//       const chunks = await FileChunkModel.getChunksByFileId(file_id);
+//       usedChunkIds = chunks.map((c) => c.id);
+//       const docContent = chunks.map((c) => c.content).join('\n\n');
+
+//       finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${docContent}`;
+//       if (additional_input?.trim())
+//         finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additional_input.trim()}`;
+
+//       storedQuestion = secretName; // ✅ non-null
+//     } else {
+//       if (!question?.trim())
+//         return res.status(400).json({ error: 'question is required.' });
+
+//       storedQuestion = question.trim(); // ✅ FIX: ensures "question" is never null
+
+//       provider = 'gemini';
+//       const questionEmbedding = await generateEmbedding(storedQuestion);
+//       const relevantChunks = await ChunkVectorModel.findNearestChunks(
+//         questionEmbedding,
+//         5,
+//         file_id
+//       );
+
+//       const relevantTexts = relevantChunks.map((c) => c.content);
+//       usedChunkIds = relevantChunks.map((c) => c.chunk_id);
+
+//       if (!relevantTexts.length) {
+//         const all = await FileChunkModel.getChunksByFileId(file_id);
+//         finalPrompt = `${storedQuestion}\n\nContext:\n${all.map((c) => c.content).join('\n\n')}`;
+//       } else {
+//         finalPrompt = `${storedQuestion}\n\nContext:\n${relevantTexts.join('\n\n')}`;
+//       }
+//     }
+
+//     // ---------- CALL LLM ----------
+//     console.log(`[chatWithDocument] Calling LLM provider: ${provider}`);
+//     const answer = await askLLM(provider, finalPrompt, { stream: false });
+
+//     if (!answer?.trim()) {
+//       return res.status(500).json({ error: 'Empty response from AI.' });
+//     }
+
+//     console.log(`[chatWithDocument] Received answer, length: ${answer.length} characters`);
+
+//     // ---------- SAVE CHAT ----------
+//     const savedChat = await FileChat.saveChat(
+//       file_id,
+//       userId,
+//       storedQuestion, // ✅ always defined now
+//       answer,
+//       finalSessionId,
+//       usedChunkIds,
+//       used_secret_prompt,
+//       finalPromptLabel,
+//       used_secret_prompt ? secret_id : null
+//     );
+
+//     console.log(`[chatWithDocument] Chat saved with ID: ${savedChat.id}`);
+
+//     // ---------- TOKEN USAGE ----------
+//     try {
+//       const { userUsage, userPlan, requestedResources } = req;
+//       await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
+//     } catch (e) {
+//       console.warn('Token usage increment failed:', e.message);
+//     }
+
+//     // ---------- FETCH HISTORY ----------
+//     const historyRows = await FileChat.getChatHistory(file_id, finalSessionId);
+//     const history = historyRows.map((row) => ({
+//       id: row.id,
+//       file_id: row.file_id,
+//       session_id: row.session_id,
+//       question: row.question,
+//       answer: row.answer,
+//       used_secret_prompt: row.used_secret_prompt || false,
+//       prompt_label: row.prompt_label || null,
+//       secret_id: row.secret_id || null,
+//       used_chunk_ids: row.used_chunk_ids || [],
+//       confidence: row.confidence || 0.8,
+//       timestamp: row.created_at || row.timestamp,
+//       display_text_left_panel: row.used_secret_prompt
+//         ? `Analysis: ${row.prompt_label || 'Secret Prompt'}`
+//         : row.question,
+//     }));
+
+//     // ---------- RETURN COMPLETE RESPONSE ----------
+//     return res.status(200).json({
+//       success: true,
+//       session_id: finalSessionId,
+//       message_id: savedChat.id,
+//       answer,
+//       response: answer,
+//       history,
+//       used_chunk_ids: usedChunkIds,
+//       confidence: used_secret_prompt ? 0.9 : 0.85,
+//       timestamp: savedChat.created_at || new Date().toISOString(),
+//       llm_provider: provider,
+//       used_secret_prompt,
+//     });
+//   } catch (error) {
+//     console.error('❌ Error in chatWithDocument:', error);
+//     console.error('Stack trace:', error.stack);
+//     return res.status(500).json({
+//       error: 'Failed to get AI answer.',
+//       details: error.message,
+//     });
+//   }
+// };
+
 exports.chatWithDocument = async (req, res) => {
   let userId = null;
 
@@ -1172,40 +1911,44 @@ exports.chatWithDocument = async (req, res) => {
 
     const finalSessionId = session_id || `session-${Date.now()}`;
 
-    // ---------- SSE HEADERS ----------
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders();
-
     console.log(
-      `[chatWithDocumentStream] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}`
+      `[chatWithDocument] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}`
     );
 
     // ---------- FILE ACCESS ----------
     const file = await DocumentModel.getFileById(file_id);
-    if (!file) return res.write(`data: ${JSON.stringify({ error: 'File not found.' })}\n\n`);
+    if (!file) return res.status(404).json({ error: 'File not found.' });
     if (String(file.user_id) !== String(userId))
-      return res.write(`data: ${JSON.stringify({ error: 'Access denied.' })}\n\n`);
-    if (file.status !== 'processed')
-      return res.write(
-        `data: ${JSON.stringify({
-          error: 'Document is not yet processed.',
-          status: file.status,
-          progress: file.processing_progress,
-        })}\n\n`
-      );
+      return res.status(403).json({ error: 'Access denied.' });
+    if (file.status !== 'processed') {
+      return res.status(400).json({
+        error: 'Document is not yet processed.',
+        status: file.status,
+        progress: file.processing_progress,
+      });
+    }
+
+    // ✅ RAG CONFIGURATION
+    const SIMILARITY_THRESHOLD = 0.75; // Cosine similarity cutoff
+    const MIN_CHUNKS = 5; // Minimum chunks to retrieve
+    const MAX_CHUNKS = 10; // Maximum chunks to retrieve
+    const MAX_CONTEXT_TOKENS = 4000; // ~15% of model limit
+    const CHARS_PER_TOKEN = 4; // Average chars per token
+    const MAX_CONTEXT_CHARS = MAX_CONTEXT_TOKENS * CHARS_PER_TOKEN; // ~16,000 chars
 
     // ---------- PROMPT BUILDING ----------
     let usedChunkIds = [];
-    let storedQuestion;
+    let storedQuestion = null;
     let finalPromptLabel = prompt_label;
     let provider = 'gemini';
     let finalPrompt = '';
 
+    // ================================
+    // CASE 1: SECRET PROMPT
+    // ================================
     if (used_secret_prompt) {
       if (!secret_id)
-        return res.write(`data: ${JSON.stringify({ error: 'secret_id required.' })}\n\n`);
+        return res.status(400).json({ error: 'secret_id required for secret prompt.' });
 
       const secretQuery = `
         SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
@@ -1214,7 +1957,7 @@ exports.chatWithDocument = async (req, res) => {
         WHERE s.id = $1`;
       const secretResult = await db.query(secretQuery, [secret_id]);
       if (!secretResult.rows.length)
-        return res.write(`data: ${JSON.stringify({ error: 'Secret configuration not found.' })}\n\n`);
+        return res.status(404).json({ error: 'Secret configuration not found.' });
 
       const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } =
         secretResult.rows[0];
@@ -1228,58 +1971,212 @@ exports.chatWithDocument = async (req, res) => {
       const [accessResponse] = await client.accessSecretVersion({ name: gcpSecretName });
       const secretValue = accessResponse.payload.data.toString('utf8');
 
-      const chunks = await FileChunkModel.getChunksByFileId(file_id);
-      usedChunkIds = chunks.map((c) => c.id);
-      const docContent = chunks.map((c) => c.content).join('\n\n');
+      // ✅ Get all chunks and apply smart selection
+      const allChunks = await FileChunkModel.getChunksByFileId(file_id);
+      
+      if (!allChunks || allChunks.length === 0) {
+        return res.status(400).json({ error: 'No content found in document.' });
+      }
+
+      // ✅ For secret prompts, use embedding-based selection
+      const secretEmbedding = await generateEmbedding(secretValue);
+      const rankedChunks = await ChunkVectorModel.findNearestChunks(
+        secretEmbedding,
+        MAX_CHUNKS, // Retrieve top 10 candidates
+        file_id
+      );
+
+      // ✅ Filter by similarity threshold
+      const highQualityChunks = rankedChunks
+        .filter(chunk => {
+          const similarity = chunk.similarity || chunk.distance || 0;
+          const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+          return score >= SIMILARITY_THRESHOLD;
+        })
+        .sort((a, b) => {
+          const scoreA = a.similarity > 1 ? (1 / (1 + a.similarity)) : a.similarity;
+          const scoreB = b.similarity > 1 ? (1 / (1 + b.similarity)) : b.similarity;
+          return scoreB - scoreA; // Best first
+        });
+
+      console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${rankedChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
+
+      // ✅ Select 5-10 best chunks within token budget
+      let selectedChunks = [];
+      let currentContextLength = 0;
+
+      const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
+        ? highQualityChunks 
+        : rankedChunks; // Fallback if not enough high-quality chunks
+
+      for (const chunk of chunksToConsider) {
+        if (selectedChunks.length >= MAX_CHUNKS) break;
+        
+        const chunkLength = chunk.content.length;
+        if (currentContextLength + chunkLength <= MAX_CONTEXT_CHARS) {
+          selectedChunks.push(chunk);
+          currentContextLength += chunkLength;
+        } else if (selectedChunks.length < MIN_CHUNKS) {
+          // If we haven't reached minimum, truncate this chunk to fit
+          const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
+          if (remainingSpace > 500) {
+            selectedChunks.push({
+              ...chunk,
+              content: chunk.content.substring(0, remainingSpace - 100) + "..."
+            });
+            currentContextLength += remainingSpace;
+          }
+          break;
+        }
+      }
+
+      // ✅ Ensure minimum chunks
+      const finalChunks = selectedChunks.length >= MIN_CHUNKS 
+        ? selectedChunks 
+        : chunksToConsider.slice(0, MIN_CHUNKS);
+
+      console.log(`✅ Selected ${finalChunks.length} chunks for secret prompt | Context: ${currentContextLength} chars (~${Math.ceil(currentContextLength / CHARS_PER_TOKEN)} tokens)`);
+
+      usedChunkIds = finalChunks.map((c) => c.chunk_id || c.id);
+
+      // ✅ Build context with separators and metadata
+      const docContent = finalChunks
+        .map((c, idx) => {
+          const similarity = c.similarity || c.distance || 0;
+          const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+          return `--- Chunk ${idx + 1} | Relevance: ${(score * 100).toFixed(1)}% ---\n${c.content}`;
+        })
+        .join('\n\n');
 
       finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${docContent}`;
-      if (additional_input?.trim())
-        finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additional_input.trim()}`;
+      
+      if (additional_input?.trim()) {
+        const trimmedInput = additional_input.trim().substring(0, 500);
+        finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${trimmedInput}`;
+      }
 
       storedQuestion = secretName;
-    } else {
+    } 
+    // ================================
+    // CASE 2: CUSTOM QUESTION
+    // ================================
+    else {
       if (!question?.trim())
-        return res.write(`data: ${JSON.stringify({ error: 'question is required.' })}\n\n`);
+        return res.status(400).json({ error: 'question is required.' });
 
+      storedQuestion = question.trim();
       provider = 'gemini';
-      const questionEmbedding = await generateEmbedding(question);
-      const relevantChunks = await ChunkVectorModel.findNearestChunks(questionEmbedding, 5, file_id);
-      const relevantTexts = relevantChunks.map((c) => c.content);
-      usedChunkIds = relevantChunks.map((c) => c.chunk_id);
 
-      if (!relevantTexts.length) {
-        const all = await FileChunkModel.getChunksByFileId(file_id);
-        finalPrompt = `${question}\n\nContext:\n${all.map((c) => c.content).join('\n\n')}`;
+      // ✅ Vector search with similarity scoring
+      const questionEmbedding = await generateEmbedding(storedQuestion);
+      const rankedChunks = await ChunkVectorModel.findNearestChunks(
+        questionEmbedding,
+        MAX_CHUNKS, // Retrieve top 10 candidates
+        file_id
+      );
+
+      if (!rankedChunks || rankedChunks.length === 0) {
+        // Fallback: use all chunks if no vector matches
+        console.log('⚠️ No vector matches found, using all chunks as fallback');
+        const allChunks = await FileChunkModel.getChunksByFileId(file_id);
+        const limitedChunks = allChunks.slice(0, MIN_CHUNKS);
+        usedChunkIds = limitedChunks.map((c) => c.id);
+        
+        const docContent = limitedChunks
+          .map((c, idx) => `--- Chunk ${idx + 1} ---\n${c.content}`)
+          .join('\n\n');
+        
+        finalPrompt = `${storedQuestion}\n\n=== DOCUMENT CONTEXT ===\n${docContent}`;
       } else {
-        finalPrompt = `${question}\n\nContext:\n${relevantTexts.join('\n\n')}`;
+        // ✅ Filter by similarity threshold
+        const highQualityChunks = rankedChunks
+          .filter(chunk => {
+            const similarity = chunk.similarity || chunk.distance || 0;
+            const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+            return score >= SIMILARITY_THRESHOLD;
+          })
+          .sort((a, b) => {
+            const scoreA = a.similarity > 1 ? (1 / (1 + a.similarity)) : a.similarity;
+            const scoreB = b.similarity > 1 ? (1 / (1 + b.similarity)) : b.similarity;
+            return scoreB - scoreA;
+          });
+
+        console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${rankedChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
+
+        // ✅ Select 5-10 best chunks within token budget
+        let selectedChunks = [];
+        let currentContextLength = 0;
+
+        const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
+          ? highQualityChunks 
+          : rankedChunks;
+
+        for (const chunk of chunksToConsider) {
+          if (selectedChunks.length >= MAX_CHUNKS) break;
+          
+          const chunkLength = chunk.content.length;
+          if (currentContextLength + chunkLength <= MAX_CONTEXT_CHARS) {
+            selectedChunks.push(chunk);
+            currentContextLength += chunkLength;
+          } else if (selectedChunks.length < MIN_CHUNKS) {
+            const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
+            if (remainingSpace > 500) {
+              selectedChunks.push({
+                ...chunk,
+                content: chunk.content.substring(0, remainingSpace - 100) + "..."
+              });
+              currentContextLength += remainingSpace;
+            }
+            break;
+          }
+        }
+
+        // ✅ Ensure minimum chunks
+        const finalChunks = selectedChunks.length >= MIN_CHUNKS 
+          ? selectedChunks 
+          : chunksToConsider.slice(0, MIN_CHUNKS);
+
+        console.log(`✅ Selected ${finalChunks.length} chunks | Context: ${currentContextLength} chars (~${Math.ceil(currentContextLength / CHARS_PER_TOKEN)} tokens)`);
+
+        usedChunkIds = finalChunks.map((c) => c.chunk_id || c.id);
+
+        // ✅ Build context with separators and metadata
+        const relevantTexts = finalChunks
+          .map((c, idx) => {
+            const similarity = c.similarity || c.distance || 0;
+            const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+            return `--- Chunk ${idx + 1} | Relevance: ${(score * 100).toFixed(1)}% ---\n${c.content}`;
+          })
+          .join('\n\n');
+
+        finalPrompt = `${storedQuestion}\n\n=== RELEVANT CONTEXT ===\n${relevantTexts}`;
       }
-      storedQuestion = question;
     }
 
-    // ---------- STREAM FROM LLM ----------
-    const stream = await askLLM(provider, finalPrompt, { stream: true });
-    let fullResponse = '';
+    // ---------- CALL LLM ----------
+    console.log(`[chatWithDocument] Calling LLM provider: ${provider} | Chunks used: ${usedChunkIds.length}`);
+    const answer = await askLLM(provider, finalPrompt, { stream: false });
 
-    for await (const chunk of stream) {
-      const text = chunk?.text || chunk;
-      fullResponse += text;
-      res.write(`data: ${JSON.stringify({ text })}\n\n`);
+    if (!answer?.trim()) {
+      return res.status(500).json({ error: 'Empty response from AI.' });
     }
 
-    console.log(`[chatWithDocumentStream] Full response length: ${fullResponse.length} characters`);
+    console.log(`[chatWithDocument] Received answer, length: ${answer.length} characters`);
 
     // ---------- SAVE CHAT ----------
     const savedChat = await FileChat.saveChat(
       file_id,
       userId,
       storedQuestion,
-      fullResponse,
+      answer,
       finalSessionId,
       usedChunkIds,
       used_secret_prompt,
       finalPromptLabel,
       used_secret_prompt ? secret_id : null
     );
+
+    console.log(`[chatWithDocument] Chat saved with ID: ${savedChat.id} | Chunks used: ${usedChunkIds.length}`);
 
     // ---------- TOKEN USAGE ----------
     try {
@@ -1289,7 +2186,7 @@ exports.chatWithDocument = async (req, res) => {
       console.warn('Token usage increment failed:', e.message);
     }
 
-    // ---------- HISTORY ----------
+    // ---------- FETCH HISTORY ----------
     const historyRows = await FileChat.getChatHistory(file_id, finalSessionId);
     const history = historyRows.map((row) => ({
       id: row.id,
@@ -1308,29 +2205,28 @@ exports.chatWithDocument = async (req, res) => {
         : row.question,
     }));
 
-    // ---------- FINALIZE ----------
-    // Do NOT include 'answer: fullResponse' here, as the client should assemble it from chunks.
-    // This reduces the size of the final message and potential client-side parsing issues.
-    res.write(
-      `data: ${JSON.stringify({
-        done: true,
-        success: true,
-        session_id: finalSessionId,
-        message_id: savedChat.id,
-        history,
-        used_chunk_ids: usedChunkIds,
-        confidence: used_secret_prompt ? 0.9 : 0.85,
-        timestamp: savedChat.created_at || new Date().toISOString(),
-        llm_provider: provider,
-        used_secret_prompt,
-      })}\n\n`
-    );
-    res.write(`data: [DONE]\n\n`);
-    res.end();
+    // ---------- RETURN COMPLETE RESPONSE ----------
+    return res.status(200).json({
+      success: true,
+      session_id: finalSessionId,
+      message_id: savedChat.id,
+      answer,
+      response: answer,
+      history,
+      used_chunk_ids: usedChunkIds,
+      chunks_used: usedChunkIds.length, // ✅ Show actual count
+      confidence: used_secret_prompt ? 0.9 : 0.85,
+      timestamp: savedChat.created_at || new Date().toISOString(),
+      llm_provider: provider,
+      used_secret_prompt,
+    });
   } catch (error) {
-    console.error('❌ Error in chatWithDocument (streaming):', error);
-    res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
-    res.end();
+    console.error('❌ Error in chatWithDocument:', error);
+    console.error('Stack trace:', error.stack);
+    return res.status(500).json({
+      error: 'Failed to get AI answer.',
+      details: error.message,
+    });
   }
 };
 

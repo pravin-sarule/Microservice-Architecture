@@ -1906,312 +1906,312 @@ exports.getFolderSummary = async (req, res) => {
 //     });
 //   }
 // };
-exports.queryFolderDocuments = async (req, res) => {
-  let chatCost;
-  let userId = req.user.id;
-  const authorizationHeader = req.headers.authorization;
+// exports.queryFolderDocuments = async (req, res) => {
+//   let chatCost;
+//   let userId = req.user.id;
+//   const authorizationHeader = req.headers.authorization;
 
-  try {
-    const { folderName } = req.params;
-    const {
-      question,
-      prompt_label = null,
-      session_id = null,
-      maxResults = 5, // ✅ REDUCED from 10
-      secret_id,
-      llm_name,
-      additional_input = "",
-    } = req.body;
+//   try {
+//     const { folderName } = req.params;
+//     const {
+//       question,
+//       prompt_label = null,
+//       session_id = null,
+//       maxResults = 5, // ✅ REDUCED from 10
+//       secret_id,
+//       llm_name,
+//       additional_input = "",
+//     } = req.body;
 
-    let used_secret_prompt = !!secret_id;
+//     let used_secret_prompt = !!secret_id;
 
-    if (!folderName) {
-      return res.status(400).json({ error: "folderName is required." });
-    }
+//     if (!folderName) {
+//       return res.status(400).json({ error: "folderName is required." });
+//     }
 
-    const finalSessionId = session_id || `session-${Date.now()}`;
-    console.log(`📁 Querying folder: ${folderName} | used_secret_prompt=${used_secret_prompt} | secret_id=${secret_id}`);
+//     const finalSessionId = session_id || `session-${Date.now()}`;
+//     console.log(`📁 Querying folder: ${folderName} | used_secret_prompt=${used_secret_prompt} | secret_id=${secret_id}`);
 
-    // 1️⃣ Get user plan & usage
-    const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(
-      userId,
-      authorizationHeader
-    );
+//     // 1️⃣ Get user plan & usage
+//     const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(
+//       userId,
+//       authorizationHeader
+//     );
 
-    // 2️⃣ Fetch all processed files in folder
-    const folderPattern = `%${folderName}%`;
-    const filesQuery = `
-      SELECT id, originalname, folder_path, status
-      FROM user_files
-      WHERE user_id = $1
-        AND is_folder = false
-        AND status = 'processed'
-        AND folder_path LIKE $2
-      ORDER BY created_at DESC;
-    `;
-    const { rows: files } = await pool.query(filesQuery, [userId, folderPattern]);
+//     // 2️⃣ Fetch all processed files in folder
+//     const folderPattern = `%${folderName}%`;
+//     const filesQuery = `
+//       SELECT id, originalname, folder_path, status
+//       FROM user_files
+//       WHERE user_id = $1
+//         AND is_folder = false
+//         AND status = 'processed'
+//         AND folder_path LIKE $2
+//       ORDER BY created_at DESC;
+//     `;
+//     const { rows: files } = await pool.query(filesQuery, [userId, folderPattern]);
 
-    if (files.length === 0) {
-      return res.status(404).json({ error: "No processed files found in this folder." });
-    }
+//     if (files.length === 0) {
+//       return res.status(404).json({ error: "No processed files found in this folder." });
+//     }
 
-    console.log(`📄 Found ${files.length} processed files in folder "${folderName}"`);
+//     console.log(`📄 Found ${files.length} processed files in folder "${folderName}"`);
 
-    // 3️⃣ ✅ KEY FIX: Collect chunks with AGGRESSIVE pre-filtering
-    let allChunks = [];
-    const MAX_CHUNKS_PER_FILE = 10; // ✅ Limit chunks per file
+//     // 3️⃣ ✅ KEY FIX: Collect chunks with AGGRESSIVE pre-filtering
+//     let allChunks = [];
+//     const MAX_CHUNKS_PER_FILE = 10; // ✅ Limit chunks per file
     
-    for (const file of files) {
-      const chunks = await FileChunk.getChunksByFileId(file.id);
+//     for (const file of files) {
+//       const chunks = await FileChunk.getChunksByFileId(file.id);
       
-      // ✅ Take only top N chunks per file (by length - usually more informative)
-      const topChunks = chunks
-        .sort((a, b) => b.content.length - a.content.length)
-        .slice(0, MAX_CHUNKS_PER_FILE)
-        .map((chunk) => ({
-          ...chunk,
-          file_id: file.id,
-          filename: file.originalname,
-        }));
+//       // ✅ Take only top N chunks per file (by length - usually more informative)
+//       const topChunks = chunks
+//         .sort((a, b) => b.content.length - a.content.length)
+//         .slice(0, MAX_CHUNKS_PER_FILE)
+//         .map((chunk) => ({
+//           ...chunk,
+//           file_id: file.id,
+//           filename: file.originalname,
+//         }));
       
-      allChunks.push(...topChunks);
-    }
+//       allChunks.push(...topChunks);
+//     }
 
-    console.log(`🧩 Pre-filtered chunks: ${allChunks.length} (from ${files.length} files, max ${MAX_CHUNKS_PER_FILE} per file)`);
+//     console.log(`🧩 Pre-filtered chunks: ${allChunks.length} (from ${files.length} files, max ${MAX_CHUNKS_PER_FILE} per file)`);
 
-    if (allChunks.length === 0) {
-      return res.status(400).json({ error: "No content found in folder documents." });
-    }
+//     if (allChunks.length === 0) {
+//       return res.status(400).json({ error: "No content found in folder documents." });
+//     }
 
-    // 4️⃣ Initialize variables
-    let answer;
-    let usedChunkIds = [];
-    let storedQuestion;
-    let displayQuestion;
-    let finalPromptLabel = prompt_label;
-    let provider = "gemini";
+//     // 4️⃣ Initialize variables
+//     let answer;
+//     let usedChunkIds = [];
+//     let storedQuestion;
+//     let displayQuestion;
+//     let finalPromptLabel = prompt_label;
+//     let provider = "gemini";
 
-    // ================================
-    // CASE 1: SECRET PROMPT
-    // ================================
-    if (used_secret_prompt) {
-      if (!secret_id)
-        return res.status(400).json({ error: "secret_id is required for secret prompts." });
+//     // ================================
+//     // CASE 1: SECRET PROMPT
+//     // ================================
+//     if (used_secret_prompt) {
+//       if (!secret_id)
+//         return res.status(400).json({ error: "secret_id is required for secret prompts." });
 
-      console.log(`🔐 Using secret prompt id=${secret_id}`);
+//       console.log(`🔐 Using secret prompt id=${secret_id}`);
 
-      // Fetch secret metadata
-      const secretQuery = `
-        SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
-        FROM secret_manager s
-        LEFT JOIN llm_models l ON s.llm_id = l.id
-        WHERE s.id = $1;
-      `;
-      const secretResult = await pool.query(secretQuery, [secret_id]);
-      if (secretResult.rows.length === 0)
-        return res.status(404).json({ error: "Secret configuration not found." });
+//       // Fetch secret metadata
+//       const secretQuery = `
+//         SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
+//         FROM secret_manager s
+//         LEFT JOIN llm_models l ON s.llm_id = l.id
+//         WHERE s.id = $1;
+//       `;
+//       const secretResult = await pool.query(secretQuery, [secret_id]);
+//       if (secretResult.rows.length === 0)
+//         return res.status(404).json({ error: "Secret configuration not found." });
 
-      const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } =
-        secretResult.rows[0];
+//       const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } =
+//         secretResult.rows[0];
      
-      finalPromptLabel = secretName;
-      storedQuestion = secretName;
-      displayQuestion = `Analysis: ${secretName}`;
+//       finalPromptLabel = secretName;
+//       storedQuestion = secretName;
+//       displayQuestion = `Analysis: ${secretName}`;
 
-      provider = resolveProviderName(llm_name || dbLlmName || "gemini");
+//       provider = resolveProviderName(llm_name || dbLlmName || "gemini");
 
-      // Fetch secret value securely
-      const { SecretManagerServiceClient } = require("@google-cloud/secret-manager");
-      const secretClient = new SecretManagerServiceClient();
-      const GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
+//       // Fetch secret value securely
+//       const { SecretManagerServiceClient } = require("@google-cloud/secret-manager");
+//       const secretClient = new SecretManagerServiceClient();
+//       const GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
 
-      const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
-      const [accessResponse] = await secretClient.accessSecretVersion({ name: gcpSecretName });
-      const secretValue = accessResponse.payload.data.toString("utf8");
+//       const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
+//       const [accessResponse] = await secretClient.accessSecretVersion({ name: gcpSecretName });
+//       const secretValue = accessResponse.payload.data.toString("utf8");
 
-      if (!secretValue?.trim()) {
-        return res.status(500).json({ error: "Secret value is empty." });
-      }
+//       if (!secretValue?.trim()) {
+//         return res.status(500).json({ error: "Secret value is empty." });
+//       }
 
-      // ✅ Vector search with REDUCED maxResults
-      const questionEmbedding = await generateEmbedding(secretValue);
-      const allRelevantChunks = [];
+//       // ✅ Vector search with REDUCED maxResults
+//       const questionEmbedding = await generateEmbedding(secretValue);
+//       const allRelevantChunks = [];
 
-      for (const file of files) {
-        const relevant = await ChunkVector.findNearestChunksAcrossFiles(
-          questionEmbedding,
-          maxResults, // Now only 5 instead of 10
-          [file.id]
-        );
-        if (relevant.length) {
-          allRelevantChunks.push(
-            ...relevant.map((r) => ({ ...r, filename: file.originalname }))
-          );
-        }
-      }
+//       for (const file of files) {
+//         const relevant = await ChunkVector.findNearestChunksAcrossFiles(
+//           questionEmbedding,
+//           maxResults, // Now only 5 instead of 10
+//           [file.id]
+//         );
+//         if (relevant.length) {
+//           allRelevantChunks.push(
+//             ...relevant.map((r) => ({ ...r, filename: file.originalname }))
+//           );
+//         }
+//       }
 
-      // ✅ Limit total chunks across all files
-      const limitedChunks = allRelevantChunks.slice(0, maxResults * 2); // Max 10 chunks total
+//       // ✅ Limit total chunks across all files
+//       const limitedChunks = allRelevantChunks.slice(0, maxResults * 2); // Max 10 chunks total
 
-      if (limitedChunks.length === 0) {
-        return res.status(404).json({ error: "No relevant information found for your query." });
-      }
+//       if (limitedChunks.length === 0) {
+//         return res.status(404).json({ error: "No relevant information found for your query." });
+//       }
 
-      usedChunkIds = limitedChunks.map((c) => c.chunk_id || c.id);
+//       usedChunkIds = limitedChunks.map((c) => c.chunk_id || c.id);
 
-      // ✅ Truncate long chunks to save tokens
-      const combinedContext = limitedChunks
-        .map((c) => {
-          const content = c.content.length > 1500 
-            ? c.content.substring(0, 1500) + "..." 
-            : c.content;
-          return `📄 [${c.filename}]\n${content}`;
-        })
-        .join("\n\n");
+//       // ✅ Truncate long chunks to save tokens
+//       const combinedContext = limitedChunks
+//         .map((c) => {
+//           const content = c.content.length > 1500 
+//             ? c.content.substring(0, 1500) + "..." 
+//             : c.content;
+//           return `📄 [${c.filename}]\n${content}`;
+//         })
+//         .join("\n\n");
 
-      console.log(`📊 Context size: ~${Math.ceil(combinedContext.length / 4)} tokens`);
+//       console.log(`📊 Context size: ~${Math.ceil(combinedContext.length / 4)} tokens`);
 
-      // ✅ Build minimal prompt
-      let finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n`;
-      finalPrompt += `${secretValue}\n\n=== RELEVANT DOCUMENTS (FOLDER: "${folderName}") ===\n${combinedContext}`;
+//       // ✅ Build minimal prompt
+//       let finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n`;
+//       finalPrompt += `${secretValue}\n\n=== RELEVANT DOCUMENTS (FOLDER: "${folderName}") ===\n${combinedContext}`;
 
-      if (additional_input?.trim()) {
-        const trimmedInput = additional_input.trim().substring(0, 500); // ✅ Limit additional input
-        finalPrompt += `\n\n=== ADDITIONAL INPUT ===\n${trimmedInput}`;
-      }
+//       if (additional_input?.trim()) {
+//         const trimmedInput = additional_input.trim().substring(0, 500); // ✅ Limit additional input
+//         finalPrompt += `\n\n=== ADDITIONAL INPUT ===\n${trimmedInput}`;
+//       }
 
-      answer = await askFolderLLMService(provider, finalPrompt);
+//       answer = await askFolderLLMService(provider, finalPrompt);
      
-      console.log(`✅ Secret prompt processed: "${secretName}"`);
-    }
+//       console.log(`✅ Secret prompt processed: "${secretName}"`);
+//     }
 
-    // ================================
-    // CASE 2: CUSTOM QUESTION
-    // ================================
-    else {
-      if (!question?.trim())
-        return res.status(400).json({ error: "question is required for custom queries." });
+//     // ================================
+//     // CASE 2: CUSTOM QUESTION
+//     // ================================
+//     else {
+//       if (!question?.trim())
+//         return res.status(400).json({ error: "question is required for custom queries." });
 
-      console.log(`💬 Handling custom question: "${question.substring(0, 50)}..."`);
+//       console.log(`💬 Handling custom question: "${question.substring(0, 50)}..."`);
 
-      storedQuestion = question;
-      displayQuestion = question;
-      finalPromptLabel = null;
-      provider = "gemini";
+//       storedQuestion = question;
+//       displayQuestion = question;
+//       finalPromptLabel = null;
+//       provider = "gemini";
      
-      // ✅ Calculate realistic token cost
-      chatCost = Math.ceil(question.length / 100) + 
-                 Math.ceil(allChunks.slice(0, maxResults * 2).reduce((sum, c) => 
-                   sum + Math.min(c.content.length, 1500), 0) / 200
-                 );
+//       // ✅ Calculate realistic token cost
+//       chatCost = Math.ceil(question.length / 100) + 
+//                  Math.ceil(allChunks.slice(0, maxResults * 2).reduce((sum, c) => 
+//                    sum + Math.min(c.content.length, 1500), 0) / 200
+//                  );
 
-      const requestedResources = { tokens: chatCost, ai_analysis: 1 };
-      const { allowed, message } = await TokenUsageService.enforceLimits(
-        usage,
-        plan,
-        requestedResources
-      );
+//       const requestedResources = { tokens: chatCost, ai_analysis: 1 };
+//       const { allowed, message } = await TokenUsageService.enforceLimits(
+//         usage,
+//         plan,
+//         requestedResources
+//       );
 
-      if (!allowed) {
-        return res.status(403).json({
-          error: `AI chat failed: ${message}`,
-          timeLeftUntilReset: timeLeft
-        });
-      }
+//       if (!allowed) {
+//         return res.status(403).json({
+//           error: `AI chat failed: ${message}`,
+//           timeLeftUntilReset: timeLeft
+//         });
+//       }
 
-      // ✅ Vector search with REDUCED maxResults
-      const questionEmbedding = await generateEmbedding(question);
-      const allRelevantChunks = [];
+//       // ✅ Vector search with REDUCED maxResults
+//       const questionEmbedding = await generateEmbedding(question);
+//       const allRelevantChunks = [];
 
-      for (const file of files) {
-        const relevant = await ChunkVector.findNearestChunksAcrossFiles(
-          questionEmbedding,
-          maxResults,
-          [file.id]
-        );
-        if (relevant.length) {
-          allRelevantChunks.push(
-            ...relevant.map((r) => ({ ...r, filename: file.originalname }))
-          );
-        }
-      }
+//       for (const file of files) {
+//         const relevant = await ChunkVector.findNearestChunksAcrossFiles(
+//           questionEmbedding,
+//           maxResults,
+//           [file.id]
+//         );
+//         if (relevant.length) {
+//           allRelevantChunks.push(
+//             ...relevant.map((r) => ({ ...r, filename: file.originalname }))
+//           );
+//         }
+//       }
 
-      // ✅ Limit total chunks
-      const limitedChunks = allRelevantChunks.slice(0, maxResults * 2);
+//       // ✅ Limit total chunks
+//       const limitedChunks = allRelevantChunks.slice(0, maxResults * 2);
 
-      if (limitedChunks.length === 0) {
-        return res.status(404).json({ error: "No relevant information found for your query." });
-      }
+//       if (limitedChunks.length === 0) {
+//         return res.status(404).json({ error: "No relevant information found for your query." });
+//       }
 
-      usedChunkIds = limitedChunks.map((c) => c.chunk_id || c.id);
+//       usedChunkIds = limitedChunks.map((c) => c.chunk_id || c.id);
 
-      // ✅ Truncate chunks
-      const combinedContext = limitedChunks
-        .map((c) => {
-          const content = c.content.length > 1500 
-            ? c.content.substring(0, 1500) + "..." 
-            : c.content;
-          return `📄 [${c.filename}]\n${content}`;
-        })
-        .join("\n\n");
+//       // ✅ Truncate chunks
+//       const combinedContext = limitedChunks
+//         .map((c) => {
+//           const content = c.content.length > 1500 
+//             ? c.content.substring(0, 1500) + "..." 
+//             : c.content;
+//           return `📄 [${c.filename}]\n${content}`;
+//         })
+//         .join("\n\n");
 
-      console.log(`📊 Context size: ~${Math.ceil(combinedContext.length / 4)} tokens`);
+//       console.log(`📊 Context size: ~${Math.ceil(combinedContext.length / 4)} tokens`);
 
-      answer = await askFolderLLMService(provider, question, "", combinedContext);
+//       answer = await askFolderLLMService(provider, question, "", combinedContext);
      
-      console.log(`✅ Custom question processed`);
-    }
+//       console.log(`✅ Custom question processed`);
+//     }
 
-    if (!answer?.trim()) {
-      return res.status(500).json({ error: "Empty response from AI." });
-    }
+//     if (!answer?.trim()) {
+//       return res.status(500).json({ error: "Empty response from AI." });
+//     }
 
-    console.log(`✅ Folder query successful | Answer length: ${answer.length}`);
+//     console.log(`✅ Folder query successful | Answer length: ${answer.length}`);
 
-    // 5️⃣ Save chat
-    const savedChat = await FolderChat.saveFolderChat(
-      userId,
-      folderName,
-      storedQuestion,
-      answer,
-      finalSessionId,
-      files.map((f) => f.id),
-      usedChunkIds,
-      used_secret_prompt,
-      finalPromptLabel,
-      secret_id
-    );
+//     // 5️⃣ Save chat
+//     const savedChat = await FolderChat.saveFolderChat(
+//       userId,
+//       folderName,
+//       storedQuestion,
+//       answer,
+//       finalSessionId,
+//       files.map((f) => f.id),
+//       usedChunkIds,
+//       used_secret_prompt,
+//       finalPromptLabel,
+//       secret_id
+//     );
 
-    if (chatCost && !used_secret_prompt) {
-      await TokenUsageService.incrementUsage(userId, { tokens: chatCost, ai_analysis: 1 });
-    }
+//     if (chatCost && !used_secret_prompt) {
+//       await TokenUsageService.incrementUsage(userId, { tokens: chatCost, ai_analysis: 1 });
+//     }
 
-    // 6️⃣ Return response
-    return res.json({
-      success: true,
-      session_id: finalSessionId,
-      answer,
-      response: answer,
-      llm_provider: provider,
-      used_secret_prompt,
-      prompt_label: finalPromptLabel,
-      secret_id: used_secret_prompt ? secret_id : null,
-      used_chunk_ids: usedChunkIds,
-      files_queried: files.map((f) => f.originalname),
-      total_files: files.length,
-      chunks_used: usedChunkIds.length, // ✅ Show actual chunks used
-      timestamp: new Date().toISOString(),
-      displayQuestion: displayQuestion,
-      storedQuestion: storedQuestion,
-    });
-  } catch (error) {
-    console.error("❌ Error in queryFolderDocuments:", error);
-    return res.status(500).json({
-      error: "Failed to get AI answer.",
-      details: error.message,
-    });
-  }
-};
+//     // 6️⃣ Return response
+//     return res.json({
+//       success: true,
+//       session_id: finalSessionId,
+//       answer,
+//       response: answer,
+//       llm_provider: provider,
+//       used_secret_prompt,
+//       prompt_label: finalPromptLabel,
+//       secret_id: used_secret_prompt ? secret_id : null,
+//       used_chunk_ids: usedChunkIds,
+//       files_queried: files.map((f) => f.originalname),
+//       total_files: files.length,
+//       chunks_used: usedChunkIds.length, // ✅ Show actual chunks used
+//       timestamp: new Date().toISOString(),
+//       displayQuestion: displayQuestion,
+//       storedQuestion: storedQuestion,
+//     });
+//   } catch (error) {
+//     console.error("❌ Error in queryFolderDocuments:", error);
+//     return res.status(500).json({
+//       error: "Failed to get AI answer.",
+//       details: error.message,
+//     });
+//   }
+// };
 
 
 // exports.queryFolderDocuments = async (req, res) => {
@@ -2555,6 +2555,392 @@ exports.queryFolderDocuments = async (req, res) => {
 //     });
 //   }
 // };
+
+exports.queryFolderDocuments = async (req, res) => {
+  let chatCost;
+  let userId = req.user.id;
+  const authorizationHeader = req.headers.authorization;
+
+  try {
+    const { folderName } = req.params;
+    const {
+      question,
+      prompt_label = null,
+      session_id = null,
+      maxResults = 10, // ✅ Retrieve top 10 candidates
+      secret_id,
+      llm_name,
+      additional_input = "",
+    } = req.body;
+
+    let used_secret_prompt = !!secret_id;
+
+    if (!folderName) {
+      return res.status(400).json({ error: "folderName is required." });
+    }
+
+    const finalSessionId = session_id || `session-${Date.now()}`;
+    console.log(`📁 Querying folder: ${folderName} | used_secret_prompt=${used_secret_prompt} | secret_id=${secret_id}`);
+
+    // 1️⃣ Get user plan & usage
+    const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(
+      userId,
+      authorizationHeader
+    );
+
+    // 2️⃣ Fetch all processed files in folder
+    const folderPattern = `%${folderName}%`;
+    const filesQuery = `
+      SELECT id, originalname, folder_path, status
+      FROM user_files
+      WHERE user_id = $1
+        AND is_folder = false
+        AND status = 'processed'
+        AND folder_path LIKE $2
+      ORDER BY created_at DESC;
+    `;
+    const { rows: files } = await pool.query(filesQuery, [userId, folderPattern]);
+
+    if (files.length === 0) {
+      return res.status(404).json({ error: "No processed files found in this folder." });
+    }
+
+    console.log(`📄 Found ${files.length} processed files in folder "${folderName}"`);
+
+    // 3️⃣ ✅ RAG Configuration
+    const SIMILARITY_THRESHOLD = 0.75; // Cosine similarity cutoff
+    const MIN_CHUNKS = 5; // Minimum chunks to retrieve
+    const MAX_CHUNKS = 10; // Maximum chunks to retrieve
+    const MAX_CONTEXT_TOKENS = 4000; // ~15% of most model limits (e.g., 32k * 0.15 ≈ 4800)
+    const CHARS_PER_TOKEN = 4; // Average chars per token
+    const MAX_CONTEXT_CHARS = MAX_CONTEXT_TOKENS * CHARS_PER_TOKEN; // ~16,000 chars
+
+    // 4️⃣ Initialize variables
+    let answer;
+    let usedChunkIds = [];
+    let storedQuestion;
+    let displayQuestion;
+    let finalPromptLabel = prompt_label;
+    let provider = "gemini";
+
+    // ================================
+    // CASE 1: SECRET PROMPT
+    // ================================
+    if (used_secret_prompt) {
+      if (!secret_id)
+        return res.status(400).json({ error: "secret_id is required for secret prompts." });
+
+      console.log(`🔐 Using secret prompt id=${secret_id}`);
+
+      // Fetch secret metadata
+      const secretQuery = `
+        SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
+        FROM secret_manager s
+        LEFT JOIN llm_models l ON s.llm_id = l.id
+        WHERE s.id = $1;
+      `;
+      const secretResult = await pool.query(secretQuery, [secret_id]);
+      if (secretResult.rows.length === 0)
+        return res.status(404).json({ error: "Secret configuration not found." });
+
+      const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } =
+        secretResult.rows[0];
+     
+      finalPromptLabel = secretName;
+      storedQuestion = secretName;
+      displayQuestion = `Analysis: ${secretName}`;
+
+      provider = resolveProviderName(llm_name || dbLlmName || "gemini");
+
+      // Fetch secret value securely
+      const { SecretManagerServiceClient } = require("@google-cloud/secret-manager");
+      const secretClient = new SecretManagerServiceClient();
+      const GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
+
+      const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
+      const [accessResponse] = await secretClient.accessSecretVersion({ name: gcpSecretName });
+      const secretValue = accessResponse.payload.data.toString("utf8");
+
+      if (!secretValue?.trim()) {
+        return res.status(500).json({ error: "Secret value is empty." });
+      }
+
+      // ✅ Vector search with similarity scoring
+      const questionEmbedding = await generateEmbedding(secretValue);
+      const allRelevantChunks = [];
+
+      for (const file of files) {
+        const relevant = await ChunkVector.findNearestChunksAcrossFiles(
+          questionEmbedding,
+          maxResults, // Retrieve top 10 candidates per file
+          [file.id]
+        );
+        if (relevant.length) {
+          allRelevantChunks.push(
+            ...relevant.map((r) => ({ 
+              ...r, 
+              filename: file.originalname,
+              similarity: r.similarity || r.distance || 0 // Ensure similarity score exists
+            }))
+          );
+        }
+      }
+
+      if (allRelevantChunks.length === 0) {
+        return res.status(404).json({ error: "No relevant information found for your query." });
+      }
+
+      // ✅ Filter by similarity threshold and sort by relevance
+      const highQualityChunks = allRelevantChunks
+        .filter(chunk => {
+          const similarity = chunk.similarity || 0;
+          // Handle both similarity (higher is better) and distance (lower is better)
+          const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+          return score >= SIMILARITY_THRESHOLD;
+        })
+        .sort((a, b) => {
+          const scoreA = a.similarity > 1 ? (1 / (1 + a.similarity)) : a.similarity;
+          const scoreB = b.similarity > 1 ? (1 / (1 + b.similarity)) : b.similarity;
+          return scoreB - scoreA; // Descending order (best first)
+        });
+
+      console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${allRelevantChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
+
+      // ✅ Select 5-10 best chunks while respecting token budget
+      let selectedChunks = [];
+      let currentContextLength = 0;
+
+      const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
+        ? highQualityChunks 
+        : allRelevantChunks.sort((a, b) => (b.similarity || 0) - (a.similarity || 0)); // Fallback to top chunks if not enough high-quality ones
+
+      for (const chunk of chunksToConsider) {
+        if (selectedChunks.length >= MAX_CHUNKS) break;
+        
+        const chunkLength = chunk.content.length;
+        if (currentContextLength + chunkLength <= MAX_CONTEXT_CHARS) {
+          selectedChunks.push(chunk);
+          currentContextLength += chunkLength;
+        } else if (selectedChunks.length < MIN_CHUNKS) {
+          // If we haven't reached minimum, truncate this chunk to fit
+          const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
+          if (remainingSpace > 500) { // Only include if we have reasonable space
+            selectedChunks.push({
+              ...chunk,
+              content: chunk.content.substring(0, remainingSpace - 100) + "..."
+            });
+            currentContextLength += remainingSpace;
+          }
+          break;
+        }
+      }
+
+      const finalChunks = selectedChunks.length >= MIN_CHUNKS 
+        ? selectedChunks 
+        : chunksToConsider.slice(0, MIN_CHUNKS); // Ensure minimum chunks
+
+      console.log(`✅ Selected ${finalChunks.length} chunks | Context size: ${currentContextLength} chars (~${Math.ceil(currentContextLength / CHARS_PER_TOKEN)} tokens)`);
+
+      usedChunkIds = finalChunks.map((c) => c.chunk_id || c.id);
+
+      // ✅ Build context with separators and metadata
+      const combinedContext = finalChunks
+        .map((c, idx) => {
+          const similarity = c.similarity || 0;
+          const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+          return `--- Chunk ${idx + 1} | File: ${c.filename} | Relevance: ${(score * 100).toFixed(1)}% ---\n${c.content}`;
+        })
+        .join("\n\n");
+
+      console.log(`📊 Final context: ${combinedContext.length} chars (~${Math.ceil(combinedContext.length / CHARS_PER_TOKEN)} tokens, ${((combinedContext.length / CHARS_PER_TOKEN) / 32000 * 100).toFixed(1)}% of 32k limit)`);
+
+      // ✅ Build minimal prompt
+      let finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n`;
+      finalPrompt += `${secretValue}\n\n=== RELEVANT DOCUMENTS (FOLDER: "${folderName}") ===\n${combinedContext}`;
+
+      if (additional_input?.trim()) {
+        const trimmedInput = additional_input.trim().substring(0, 500);
+        finalPrompt += `\n\n=== ADDITIONAL INPUT ===\n${trimmedInput}`;
+      }
+
+      answer = await askFolderLLMService(provider, finalPrompt);
+     
+      console.log(`✅ Secret prompt processed: "${secretName}"`);
+    }
+
+    // ================================
+    // CASE 2: CUSTOM QUESTION
+    // ================================
+    else {
+      if (!question?.trim())
+        return res.status(400).json({ error: "question is required for custom queries." });
+
+      console.log(`💬 Handling custom question: "${question.substring(0, 50)}..."`);
+
+      storedQuestion = question;
+      displayQuestion = question;
+      finalPromptLabel = null;
+      provider = "gemini";
+     
+      // ✅ Vector search with similarity scoring
+      const questionEmbedding = await generateEmbedding(question);
+      const allRelevantChunks = [];
+
+      for (const file of files) {
+        const relevant = await ChunkVector.findNearestChunksAcrossFiles(
+          questionEmbedding,
+          maxResults, // Retrieve top 10 candidates per file
+          [file.id]
+        );
+        if (relevant.length) {
+          allRelevantChunks.push(
+            ...relevant.map((r) => ({ 
+              ...r, 
+              filename: file.originalname,
+              similarity: r.similarity || r.distance || 0
+            }))
+          );
+        }
+      }
+
+      if (allRelevantChunks.length === 0) {
+        return res.status(404).json({ error: "No relevant information found for your query." });
+      }
+
+      // ✅ Filter by similarity threshold and sort by relevance
+      const highQualityChunks = allRelevantChunks
+        .filter(chunk => {
+          const similarity = chunk.similarity || 0;
+          const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+          return score >= SIMILARITY_THRESHOLD;
+        })
+        .sort((a, b) => {
+          const scoreA = a.similarity > 1 ? (1 / (1 + a.similarity)) : a.similarity;
+          const scoreB = b.similarity > 1 ? (1 / (1 + b.similarity)) : b.similarity;
+          return scoreB - scoreA;
+        });
+
+      console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${allRelevantChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
+
+      // ✅ Select 5-10 best chunks while respecting token budget
+      let selectedChunks = [];
+      let currentContextLength = 0;
+
+      const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
+        ? highQualityChunks 
+        : allRelevantChunks.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+
+      for (const chunk of chunksToConsider) {
+        if (selectedChunks.length >= MAX_CHUNKS) break;
+        
+        const chunkLength = chunk.content.length;
+        if (currentContextLength + chunkLength <= MAX_CONTEXT_CHARS) {
+          selectedChunks.push(chunk);
+          currentContextLength += chunkLength;
+        } else if (selectedChunks.length < MIN_CHUNKS) {
+          const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
+          if (remainingSpace > 500) {
+            selectedChunks.push({
+              ...chunk,
+              content: chunk.content.substring(0, remainingSpace - 100) + "..."
+            });
+            currentContextLength += remainingSpace;
+          }
+          break;
+        }
+      }
+
+      const finalChunks = selectedChunks.length >= MIN_CHUNKS 
+        ? selectedChunks 
+        : chunksToConsider.slice(0, MIN_CHUNKS);
+
+      console.log(`✅ Selected ${finalChunks.length} chunks | Context size: ${currentContextLength} chars (~${Math.ceil(currentContextLength / CHARS_PER_TOKEN)} tokens)`);
+
+      usedChunkIds = finalChunks.map((c) => c.chunk_id || c.id);
+
+      // ✅ Calculate realistic token cost
+      chatCost = Math.ceil(question.length / 100) + Math.ceil(currentContextLength / 200);
+
+      const requestedResources = { tokens: chatCost, ai_analysis: 1 };
+      const { allowed, message } = await TokenUsageService.enforceLimits(
+        usage,
+        plan,
+        requestedResources
+      );
+
+      if (!allowed) {
+        return res.status(403).json({
+          error: `AI chat failed: ${message}`,
+          timeLeftUntilReset: timeLeft
+        });
+      }
+
+      // ✅ Build context with separators and metadata
+      const combinedContext = finalChunks
+        .map((c, idx) => {
+          const similarity = c.similarity || 0;
+          const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+          return `--- Chunk ${idx + 1} | File: ${c.filename} | Relevance: ${(score * 100).toFixed(1)}% ---\n${c.content}`;
+        })
+        .join("\n\n");
+
+      console.log(`📊 Final context: ${combinedContext.length} chars (~${Math.ceil(combinedContext.length / CHARS_PER_TOKEN)} tokens, ${((combinedContext.length / CHARS_PER_TOKEN) / 32000 * 100).toFixed(1)}% of 32k limit)`);
+
+      answer = await askFolderLLMService(provider, question, "", combinedContext);
+     
+      console.log(`✅ Custom question processed`);
+    }
+
+    if (!answer?.trim()) {
+      return res.status(500).json({ error: "Empty response from AI." });
+    }
+
+    console.log(`✅ Folder query successful | Answer length: ${answer.length} | Chunks used: ${usedChunkIds.length}`);
+
+    // 5️⃣ Save chat
+    const savedChat = await FolderChat.saveFolderChat(
+      userId,
+      folderName,
+      storedQuestion,
+      answer,
+      finalSessionId,
+      files.map((f) => f.id),
+      usedChunkIds,
+      used_secret_prompt,
+      finalPromptLabel,
+      secret_id
+    );
+
+    if (chatCost && !used_secret_prompt) {
+      await TokenUsageService.incrementUsage(userId, { tokens: chatCost, ai_analysis: 1 });
+    }
+
+    // 6️⃣ Return response
+    return res.json({
+      success: true,
+      session_id: finalSessionId,
+      answer,
+      response: answer,
+      llm_provider: provider,
+      used_secret_prompt,
+      prompt_label: finalPromptLabel,
+      secret_id: used_secret_prompt ? secret_id : null,
+      used_chunk_ids: usedChunkIds,
+      files_queried: files.map((f) => f.originalname),
+      total_files: files.length,
+      chunks_used: usedChunkIds.length,
+      timestamp: new Date().toISOString(),
+      displayQuestion: displayQuestion,
+      storedQuestion: storedQuestion,
+    });
+  } catch (error) {
+    console.error("❌ Error in queryFolderDocuments:", error);
+    return res.status(500).json({
+      error: "Failed to get AI answer.",
+      details: error.message,
+    });
+  }
+};
 /* ----------------- Get Folder Processing Status (NEW) ----------------- */
 exports.getFolderProcessingStatus = async (req, res) => {
   try {
