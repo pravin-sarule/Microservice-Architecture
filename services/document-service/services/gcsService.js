@@ -60,3 +60,26 @@ exports.getSignedUrl = async (gcsPath, expiresInSeconds = 300) => {
 
   return url;
 };
+
+/**
+ * Generate a signed URL for direct upload to GCS
+ *
+ * @param {string} gcsPath - Path inside the bucket where file will be uploaded
+ * @param {string} contentType - MIME type of the file
+ * @param {number} expiresInMinutes - Expiry in minutes (default 15 min)
+ * @param {boolean} useInputBucket - If true, use fileInputBucket instead of default bucket
+ * @returns {Promise<string>} Signed URL for PUT upload
+ */
+exports.getSignedUploadUrl = async (gcsPath, contentType = 'application/octet-stream', expiresInMinutes = 15, useInputBucket = false) => {
+  const targetBucket = useInputBucket ? fileInputBucket : bucket;
+  const file = targetBucket.file(gcsPath);
+
+  const [url] = await file.getSignedUrl({
+    version: 'v4',
+    action: 'write',
+    expires: Date.now() + expiresInMinutes * 60 * 1000,
+    contentType: contentType,
+  });
+
+  return url;
+};

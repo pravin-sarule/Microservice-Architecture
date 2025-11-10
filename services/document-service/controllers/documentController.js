@@ -12,7 +12,7 @@ const FileChat = require("../models/FileChat");
 const secretManagerController = require("./secretManagerController"); // NEW: Import secretManagerController
 const { getSecretDetailsById } = require('../controllers/secretManagerController');
 const { validate: isUuid } = require("uuid");
-const { uploadToGCS, getSignedUrl } = require("../services/gcsService");
+const { uploadToGCS, getSignedUrl, getSignedUploadUrl } = require("../services/gcsService");
 const {
  convertHtmlToDocx,
  convertHtmlToPdf,
@@ -113,15 +113,196 @@ exports.uploadDocument = async (req, res) => {
  // Asynchronously process the document
  processDocument(fileId, buffer, mimetype, userId, secret_id); // NEW: Pass secret_id to processDocument
 
- res.status(202).json({
- message: "Document uploaded and processing initiated.",
- file_id: fileId,
- gs_uri: gsUri,
- });
- } catch (error) {
- console.error("❌ uploadDocument error:", error);
- res.status(500).json({ error: "Failed to upload document." });
- }
+  res.status(202).json({
+    message: "Document uploaded and processing initiated.",
+    file_id: fileId,
+    gs_uri: gsUri,
+  });
+} catch (error) {
+  console.error("❌ uploadDocument error:", error);
+  res.status(500).json({ error: "Failed to upload document." });
+}
+};
+
+/**
+ * @description Generate signed URL for direct upload to GCS (for large files >32MB)
+ * @route POST /api/doc/generate-upload-url
+ */
+exports.generateUploadUrl = async (req, res) => {
+  const userId = req.user.id;
+  const authorizationHeader = req.headers.authorization;
+
+  try {
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+    const { filename, mimetype, size } = req.body;
+    if (!filename) {
+      return res.status(400).json({ error: "Filename is required" });
+    }
+
+    // Generate GCS path
+    const folderPath = `uploads/${userId}`;
+    const path = require('path');
+    const timestamp = Date.now();
+    const safeFilename = filename.replace(/\s+/g, '_');
+    const gcsPath = path.posix.join(folderPath, `${timestamp}_${safeFilename}`);
+
+    // Generate signed URL for upload (15 minutes expiry)
+    const signedUrl = await getSignedUploadUrl(
+      gcsPath,
+      mimetype || 'application/octet-stream',
+      15,
+      true // Use input bucket for document uploads
+    );
+
+    return res.status(200).json({
+      signedUrl,
+      gcsPath,
+      filename: safeFilename,
+      folderPath,
+    });
+  } catch (error) {
+    console.error("❌ generateUploadUrl error:", error);
+    res.status(500).json({
+      error: "Failed to generate upload URL",
+      details: error.message
+    });
+  }
+};
+
+/**
+ * @description Handle post-upload processing after file is uploaded via signed URL
+ * @route POST /api/doc/complete-upload
+ */
+exports.completeSignedUpload = async (req, res) => {
+  const userId = req.user.id;
+  const authorizationHeader = req.headers.authorization;
+
+  try {
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+    const { gcsPath, filename, mimetype, size, secret_id } = req.body;
+    if (!gcsPath || !filename || !size) {
+      return res.status(400).json({ error: "gcsPath, filename, and size are required" });
+    }
+
+    // Verify file exists in GCS
+    const { fileInputBucket } = require("../config/gcs");
+    const fileRef = fileInputBucket.file(gcsPath);
+    const [exists] = await fileRef.exists();
+    if (!exists) {
+      console.error(`❌ [completeSignedUpload] File not found in GCS: ${gcsPath}`);
+      return res.status(404).json({ error: "File not found in storage. Upload may have failed." });
+    }
+    
+    // Verify file metadata
+    const [metadata] = await fileRef.getMetadata();
+    console.log(`✅ [completeSignedUpload] File found in GCS: ${gcsPath}`);
+    console.log(`📋 [completeSignedUpload] File metadata:`, {
+      size: metadata.size,
+      contentType: metadata.contentType,
+      timeCreated: metadata.timeCreated,
+      bucket: fileInputBucket.name
+    });
+    
+    // Validate file size matches
+    if (metadata.size && parseInt(metadata.size) !== parseInt(size)) {
+      console.warn(`⚠️ [completeSignedUpload] Size mismatch: expected ${size}, got ${metadata.size}`);
+    }
+    
+    // Validate mime type if provided
+    if (mimetype && metadata.contentType && metadata.contentType !== mimetype) {
+      console.warn(`⚠️ [completeSignedUpload] MIME type mismatch: expected ${mimetype}, got ${metadata.contentType}`);
+      // Use the actual content type from GCS
+      mimetype = metadata.contentType;
+    }
+
+    // Check storage limits
+    const { usage: userUsage, plan: userPlan } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+    const storageLimitCheck = await checkStorageLimit(userId, size, userPlan);
+    if (!storageLimitCheck.allowed) {
+      // Delete the uploaded file if storage limit exceeded
+      await fileRef.delete().catch(err => console.error("Failed to delete file:", err));
+      return res.status(403).json({ error: storageLimitCheck.message });
+    }
+
+    // Calculate requested resources
+    const requestedResources = {
+      tokens: DOCUMENT_UPLOAD_COST_TOKENS,
+      documents: 1,
+      ai_analysis: 1,
+      storage_gb: size / (1024 ** 3),
+    };
+
+    // Enforce limits
+    const limitCheck = await TokenUsageService.enforceLimits(
+      userId,
+      userUsage,
+      userPlan,
+      requestedResources
+    );
+
+    if (!limitCheck.allowed) {
+      // Delete the uploaded file if limits exceeded
+      await fileRef.delete().catch(err => console.error("Failed to delete file:", err));
+      return res.status(403).json({
+        success: false,
+        message: limitCheck.message,
+        nextRenewalTime: limitCheck.nextRenewalTime,
+        remainingTime: limitCheck.remainingTime,
+      });
+    }
+
+    // Extract folder path from gcsPath
+    const folderPath = `uploads/${userId}`;
+    const gsUri = `gs://${fileInputBucket.name}/${gcsPath}`;
+
+    // Save file metadata to database
+    const fileId = await DocumentModel.saveFileMetadata(
+      userId,
+      filename,
+      gsUri,
+      folderPath,
+      mimetype || 'application/octet-stream',
+      size,
+      "uploaded"
+    );
+
+    // Increment usage after successful upload
+    await TokenUsageService.incrementUsage(userId, requestedResources, userPlan);
+
+    // Download file buffer for processing
+    console.log(`📥 [completeSignedUpload] Downloading file buffer for processing...`);
+    const [fileBuffer] = await fileRef.download();
+    
+    if (!fileBuffer || fileBuffer.length === 0) {
+      console.error(`❌ [completeSignedUpload] Downloaded file buffer is empty!`);
+      await fileRef.delete().catch(err => console.error("Failed to delete empty file:", err));
+      return res.status(400).json({ error: "Uploaded file appears to be empty or corrupted." });
+    }
+    
+    console.log(`✅ [completeSignedUpload] File buffer downloaded: ${fileBuffer.length} bytes`);
+    console.log(`🚀 [completeSignedUpload] Starting document processing with mime type: ${mimetype || 'application/octet-stream'}`);
+    
+    // Asynchronously process the document
+    processDocument(fileId, fileBuffer, mimetype || metadata.contentType || 'application/octet-stream', userId, secret_id)
+      .catch(err => {
+        console.error(`❌ [completeSignedUpload] Error in processDocument:`, err);
+        console.error(`❌ [completeSignedUpload] Error stack:`, err.stack);
+      });
+
+    return res.status(202).json({
+      message: "Document uploaded and processing initiated.",
+      file_id: fileId,
+      gs_uri: gsUri,
+    });
+  } catch (error) {
+    console.error("❌ completeSignedUpload error:", error);
+    res.status(500).json({
+      error: "Failed to complete upload",
+      details: error.message
+    });
+  }
 };
 
 
@@ -642,21 +823,165 @@ async function processDocument(
  "OCR processing started (this may take a moment)"
  );
 
- extractedTexts = await extractTextFromDocument(fileBuffer, mimetype);
+ const FILE_SIZE_LIMIT_INLINE = 20 * 1024 * 1024; // 20MB - Document AI inline limit
+ const fileSizeMB = (fileBuffer.length / 1024 / 1024).toFixed(2);
+ const isLargeFile = fileBuffer.length > FILE_SIZE_LIMIT_INLINE;
 
- await updateProcessingProgress(
- fileId,
- "processing",
- 38.0,
- "OCR processing completed"
- );
+ console.log(`[processDocument] Processing file with Document AI (${fileSizeMB}MB, mimeType: ${mimetype})`);
 
- await updateProcessingProgress(
- fileId,
- "processing",
- 42.0,
- "Text extraction successful"
- );
+ // Try inline processing first, fall back to batch if it fails or file is too large
+ let useBatchProcessing = isLargeFile;
+ 
+ if (!useBatchProcessing) {
+   // Try inline processing for smaller files
+   try {
+     extractedTexts = await extractTextFromDocument(fileBuffer, mimetype);
+     
+     if (!extractedTexts || extractedTexts.length === 0) {
+       console.warn(`[processDocument] No text extracted from inline processing, trying batch processing`);
+       useBatchProcessing = true;
+     } else {
+       console.log(`[processDocument] Successfully extracted ${extractedTexts.length} text segment(s) using inline processing`);
+       
+       await updateProcessingProgress(
+         fileId,
+         "processing",
+         38.0,
+         "OCR processing completed"
+       );
+
+       await updateProcessingProgress(
+         fileId,
+         "processing",
+         42.0,
+         "Text extraction successful"
+       );
+     }
+   } catch (ocrError) {
+     console.warn(`[processDocument] Inline OCR failed (${ocrError.message}), falling back to batch processing`);
+     useBatchProcessing = true;
+   }
+ }
+
+ // Use batch processing for large files or if inline failed
+ if (useBatchProcessing) {
+   console.log(`[processDocument] Using batch processing (file: ${fileSizeMB}MB)`);
+   
+   await updateProcessingProgress(
+     fileId,
+     "processing",
+     26.0,
+     "Uploading to GCS for batch processing"
+   );
+   
+   // Get original filename from database if available
+   const fileRecord = await DocumentModel.getFileById(fileId);
+   const originalFilename = fileRecord?.originalname || `file_${fileId}`;
+   
+   // Upload to GCS for batch processing
+   const batchUploadFolder = `batch-uploads/${userId}/${uuidv4()}`;
+   const { gsUri: gcsInputUri } = await uploadToGCS(
+     originalFilename,
+     fileBuffer,
+     batchUploadFolder,
+     true, // Use input bucket
+     mimetype
+   );
+   
+   await updateProcessingProgress(
+     fileId,
+     "batch_processing",
+     30.0,
+     "Starting batch OCR processing"
+   );
+   
+   const outputPrefix = `document-ai-results/${userId}/${uuidv4()}/`;
+   const gcsOutputUriPrefix = `gs://${fileOutputBucket.name}/${outputPrefix}`;
+   
+   const operationName = await batchProcessDocument(
+     [gcsInputUri],
+     gcsOutputUriPrefix,
+     mimetype
+   );
+   
+   console.log(`[processDocument] Batch operation started: ${operationName}`);
+   
+   // Update job with batch operation details
+   const job = await ProcessingJobModel.getJobByFileId(fileId);
+   if (job && job.job_id) {
+     await ProcessingJobModel.updateJob(job.job_id, {
+       gcs_input_uri: gcsInputUri,
+       gcs_output_uri_prefix: gcsOutputUriPrefix,
+       document_ai_operation_name: operationName,
+       type: "batch",
+       status: "running",
+     });
+   }
+   
+   // Poll for batch completion and continue processing
+   let batchCompleted = false;
+   let attempts = 0;
+   const maxAttempts = 120; // 10 minutes max
+   
+   while (!batchCompleted && attempts < maxAttempts) {
+     await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+     attempts++;
+     
+     try {
+       const status = await getOperationStatus(operationName);
+       
+       if (status.done) {
+         batchCompleted = true;
+         
+         if (status.error) {
+           console.error(`[processDocument] Batch processing error:`, status.error);
+           throw new Error(`Batch processing failed: ${JSON.stringify(status.error)}`);
+         }
+         
+         // Fetch results from GCS
+         await updateProcessingProgress(
+           fileId,
+           "processing",
+           40.0,
+           "Fetching batch processing results"
+         );
+         
+         const bucketName = fileOutputBucket.name;
+         const prefix = outputPrefix;
+         extractedTexts = await fetchBatchResults(bucketName, prefix);
+         
+         if (!extractedTexts || extractedTexts.length === 0) {
+           throw new Error("No text extracted from batch processing results");
+         }
+         
+         console.log(`[processDocument] Successfully extracted ${extractedTexts.length} text segment(s) from batch processing`);
+         
+         await updateProcessingProgress(
+           fileId,
+           "processing",
+           42.0,
+           "Batch OCR processing completed"
+         );
+       } else {
+         // Update progress
+         const progress = Math.min(30 + (attempts * 0.15), 39);
+         await updateProcessingProgress(
+           fileId,
+           "batch_processing",
+           progress,
+           "Batch OCR processing in progress"
+         );
+       }
+     } catch (pollError) {
+       console.error(`[processDocument] Batch polling error:`, pollError);
+       throw pollError;
+     }
+   }
+   
+   if (!batchCompleted) {
+     throw new Error("Batch processing timeout after 10 minutes");
+   }
+ }
  } else {
  console.log(
  `[processDocument] Using standard text extraction for file ID ${fileId}`

@@ -21,6 +21,7 @@ const FolderChat = require("../models/FolderChat");
 const {
   uploadToGCS,
   getSignedUrl: getSignedUrlFromGCS, // Renamed to avoid conflict
+  getSignedUploadUrl,
 } = require("../services/gcsService");
 const { getSignedUrl } = require("../services/folderService"); // Import from folderService
 const { checkStorageLimit } = require("../utils/storage");
@@ -1371,6 +1372,200 @@ exports .getFolders = async (req, res) => {
 
 
 /* ---------------------- Upload Documents (FIXED) ---------------------- */
+/**
+ * Generate signed URL for direct upload to GCS (for large files >32MB)
+ * @route POST /:folderName/generate-upload-url
+ */
+exports.generateUploadUrl = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { folderName } = req.params;
+    const { filename, mimetype, size } = req.body;
+
+    if (!filename) {
+      return res.status(400).json({ error: "Filename is required" });
+    }
+
+    // Find the folder
+    const folderQuery = `
+      SELECT * FROM user_files
+      WHERE user_id = $1
+        AND is_folder = true
+        AND originalname = $2
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    const { rows: folderRows } = await pool.query(folderQuery, [userId, folderName]);
+   
+    if (folderRows.length === 0) {
+      return res.status(404).json({
+        error: `Folder "${folderName}" not found for this user.`,
+      });
+    }
+
+    const folderRow = folderRows[0];
+    const ext = path.extname(filename);
+    const baseName = path.basename(filename, ext);
+    const safeName = sanitizeName(baseName) + ext;
+    const key = `${folderRow.gcs_path}${safeName}`;
+    const uniqueKey = await ensureUniqueKey(key);
+
+    // Generate signed URL for upload (15 minutes expiry)
+    const signedUrl = await getSignedUploadUrl(
+      uniqueKey,
+      mimetype || 'application/octet-stream',
+      15,
+      false // Use default bucket, not input bucket
+    );
+
+    return res.status(200).json({
+      signedUrl,
+      gcsPath: uniqueKey,
+      filename: safeName,
+      folderPath: folderRow.folder_path,
+    });
+  } catch (error) {
+    console.error("❌ generateUploadUrl error:", error);
+    res.status(500).json({
+      error: "Failed to generate upload URL",
+      details: error.message
+    });
+  }
+};
+
+/**
+ * Handle post-upload processing after file is uploaded via signed URL
+ * @route POST /:folderName/complete-upload
+ */
+exports.completeSignedUpload = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { folderName } = req.params;
+    const { gcsPath, filename, mimetype, size, secret_id } = req.body;
+
+    if (!gcsPath || !filename || !size) {
+      return res.status(400).json({ error: "gcsPath, filename, and size are required" });
+    }
+
+    // Find the folder
+    const folderQuery = `
+      SELECT * FROM user_files
+      WHERE user_id = $1
+        AND is_folder = true
+        AND originalname = $2
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    const { rows: folderRows } = await pool.query(folderQuery, [userId, folderName]);
+   
+    if (folderRows.length === 0) {
+      return res.status(404).json({
+        error: `Folder "${folderName}" not found for this user.`,
+      });
+    }
+
+    const folderRow = folderRows[0];
+
+    // Verify file exists in GCS
+    const fileRef = bucket.file(gcsPath);
+    const [exists] = await fileRef.exists();
+    if (!exists) {
+      return res.status(404).json({ error: "File not found in storage. Upload may have failed." });
+    }
+
+    // Check storage limits
+    const authorizationHeader = req.headers.authorization;
+    const { usage: userUsage, plan: userPlan } = await TokenUsageService.getUserUsageAndPlan(userId, authorizationHeader);
+    const storageLimitCheck = await checkStorageLimit(userId, size, userPlan);
+    if (!storageLimitCheck.allowed) {
+      // Delete the uploaded file if storage limit exceeded
+      await fileRef.delete().catch(err => console.error("Failed to delete file:", err));
+      return res.status(403).json({ error: storageLimitCheck.message });
+    }
+
+    // Calculate requested resources
+    const { DOCUMENT_UPLOAD_COST_TOKENS } = require("../middleware/checkTokenLimits");
+    const requestedResources = {
+      tokens: DOCUMENT_UPLOAD_COST_TOKENS,
+      documents: 1,
+      ai_analysis: 1,
+      storage_gb: size / (1024 ** 3),
+    };
+
+    // Enforce limits
+    const limitCheck = await TokenUsageService.enforceLimits(
+      userId,
+      userUsage,
+      userPlan,
+      requestedResources
+    );
+
+    if (!limitCheck.allowed) {
+      // Delete the uploaded file if limits exceeded
+      await fileRef.delete().catch(err => console.error("Failed to delete file:", err));
+      return res.status(403).json({
+        success: false,
+        message: limitCheck.message,
+        nextRenewalTime: limitCheck.nextRenewalTime,
+        remainingTime: limitCheck.remainingTime,
+      });
+    }
+
+    // Save file metadata to database
+    const savedFile = await File.create({
+      user_id: userId,
+      originalname: filename,
+      gcs_path: gcsPath,
+      folder_path: folderRow.folder_path,
+      mimetype: mimetype || 'application/octet-stream',
+      size: size,
+      is_folder: false,
+      status: "queued",
+      processing_progress: 0,
+    });
+
+    // Increment usage after successful upload
+    await TokenUsageService.incrementUsage(userId, requestedResources, userPlan);
+
+    // Download file buffer for processing (since we need it for processDocumentWithAI)
+    const [fileBuffer] = await fileRef.download();
+
+    // Process document asynchronously
+    processDocumentWithAI(
+      savedFile.id,
+      fileBuffer,
+      mimetype || 'application/octet-stream',
+      userId,
+      filename,
+      secret_id
+    ).catch(err =>
+      console.error(`❌ Background processing failed for ${savedFile.id}:`, err.message)
+    );
+
+    const previewUrl = await makeSignedReadUrl(gcsPath, 15);
+
+    return res.status(201).json({
+      message: "File uploaded and processing started.",
+      document: {
+        ...savedFile,
+        previewUrl,
+        status: "uploaded_and_queued",
+      },
+      folderInfo: {
+        folderName: folderRow.originalname,
+        folder_path: folderRow.folder_path,
+        gcs_path: folderRow.gcs_path
+      }
+    });
+  } catch (error) {
+    console.error("❌ completeSignedUpload error:", error);
+    res.status(500).json({
+      error: "Failed to complete upload",
+      details: error.message
+    });
+  }
+};
+
 exports.uploadDocumentsToCaseByFolderName = async (req, res) => {
   try {
     const username = req.user.username;

@@ -15,6 +15,20 @@ const upload = multer({ storage: multer.memoryStorage() });
 // Document Routes
 // =========================
 
+// Generate signed URL for large file uploads (>32MB)
+router.post(
+  "/generate-upload-url",
+  protect,
+  controller.generateUploadUrl
+);
+
+// Complete upload after signed URL upload
+router.post(
+  "/complete-upload",
+  protect,
+  controller.completeSignedUpload
+);
+
 // Single Document Upload & processing
 router.post(
   "/upload",

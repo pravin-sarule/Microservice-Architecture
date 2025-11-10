@@ -25,6 +25,12 @@ router.get("/cases", authMiddleware.protect, fileController.getAllCases);
 // Get all documents in a specific folder
 router.get("/:folderName/documents", authMiddleware.protect, fileController.getDocumentsInFolder);
 
+// Generate signed URL for large file uploads (>32MB)
+router.post("/:folderName/generate-upload-url", authMiddleware.protect, fileController.generateUploadUrl);
+
+// Complete upload after signed URL upload
+router.post("/:folderName/complete-upload", authMiddleware.protect, fileController.completeSignedUpload);
+
 // Upload multiple docs to folder
 router.post("/:folderName/upload", authMiddleware.protect, checkDocumentUploadLimits, upload.array("files", 10), fileController.uploadDocumentsToCaseByFolderName);
 
