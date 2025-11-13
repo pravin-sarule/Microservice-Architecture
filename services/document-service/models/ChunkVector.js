@@ -8,7 +8,10 @@ const ChunkVector = {
     const res = await pool.query(`
       INSERT INTO chunk_vectors (chunk_id, embedding, file_id)
       VALUES ($1, $2::vector, $3::uuid)
-      RETURNING id
+      ON CONFLICT (chunk_id) DO UPDATE
+        SET embedding = EXCLUDED.embedding,
+            updated_at = NOW()
+      RETURNING id, chunk_id
     `, [chunkId, embeddingPgVector, fileId]);
     return res.rows[0].id;
   },
@@ -33,11 +36,27 @@ const ChunkVector = {
     const query = `
       INSERT INTO chunk_vectors (chunk_id, embedding, file_id)
       VALUES ${placeholders.join(', ')}
+      ON CONFLICT (chunk_id) DO UPDATE
+        SET embedding = EXCLUDED.embedding,
+            updated_at = NOW()
       RETURNING id, chunk_id;
     `;
 
     const res = await pool.query(query, values);
     return res.rows;
+  },
+
+  async getExistingChunkIds(chunkIds) {
+    const ids = Array.isArray(chunkIds) ? chunkIds : [chunkIds];
+    const { rows } = await pool.query(
+      `
+        SELECT chunk_id
+        FROM chunk_vectors
+        WHERE chunk_id = ANY($1::int[])
+      `,
+      [ids]
+    );
+    return rows.map((row) => row.chunk_id);
   },
 
   async getVectorsByChunkIds(chunkIds) {

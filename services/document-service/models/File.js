@@ -286,10 +286,16 @@ class File {
   }
 
   // Update processing status and progress
-  static async updateProcessingStatus(id, status, progress) {
+  static async updateProcessingStatus(id, status, progress, operation = null) {
     const result = await pool.query(
-      `UPDATE user_files SET status = $2, processing_progress = $3, updated_at = NOW() WHERE id = $1::uuid RETURNING *`,
-      [id, status, progress]
+      `UPDATE user_files
+       SET status = $2,
+           processing_progress = $3,
+           current_operation = $4,
+           updated_at = NOW()
+       WHERE id = $1::uuid
+       RETURNING *`,
+      [id, status, progress, operation]
     );
     return result.rows[0];
   }

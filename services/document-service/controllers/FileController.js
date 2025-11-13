@@ -37,6 +37,7 @@ const {
 } = require("../services/documentAiService");
 const { chunkDocument } = require("../services/chunkingService");
 const { generateEmbedding, generateEmbeddings } = require("../services/embeddingService");
+const { enqueueEmbeddingJob } = require("../queues/embeddingQueue");
 const { fileInputBucket, fileOutputBucket } = require("../config/gcs");
 const TokenUsageService = require("../services/tokenUsageService"); // Import TokenUsageService
 const { SecretManagerServiceClient } = require('@google-cloud/secret-manager'); // NEW
@@ -94,11 +95,10 @@ const PROGRESS_STAGES = {
   FETCH_RESULTS: { start: 42, end: 45, status: 'processing' },
   CONFIG: { start: 45, end: 48, status: 'processing' },
   CHUNKING: { start: 48, end: 58, status: 'processing' },
-  EMBEDDINGS: { start: 58, end: 76, status: 'processing' },
-  SAVE_CHUNKS: { start: 76, end: 82, status: 'processing' },
-  SAVE_VECTORS: { start: 82, end: 88, status: 'processing' },
-  SUMMARY: { start: 88, end: 96, status: 'processing' },
-  FINALIZE: { start: 96, end: 100, status: 'processing' },
+  EMBEDDING_QUEUE: { start: 58, end: 68, status: 'processing' },
+  SAVE_CHUNKS: { start: 68, end: 78, status: 'processing' },
+  SUMMARY: { start: 78, end: 88, status: 'embedding_pending' },
+  FINALIZE: { start: 88, end: 100, status: 'embedding_pending' },
 };
 
 /**
@@ -127,6 +127,18 @@ function getOperationName(progress, status) {
     return "Completing OCR extraction";
   }
   
+  if (status === "embedding_pending") {
+    return "Waiting for background embedding";
+  }
+
+  if (status === "embedding_processing") {
+    return "Embedding chunks in background";
+  }
+
+  if (status === "embedding_failed") {
+    return "Embedding failed";
+  }
+
   // Post-processing stage (42-100%)
   if (status === "processing") {
     if (p < 45) return "Fetching OCR results";
@@ -271,9 +283,15 @@ async function pollBatchProgress(fileId, jobId, operationName) {
         console.log(`[Batch Polling] 🚀 Triggering post-processing for file: ${fileId}`);
         
         // Trigger post-processing
-        processBatchResults(fileId, job).catch(err => {
-          console.error(`[Batch Polling] ❌ Post-processing error:`, err);
-        });
+if (file.status !== "processing_locked") {
+          File.updateProcessingStatus(fileId, "processing_locked", 42.0)
+            .then(() => {
+              processBatchResults(fileId, job).catch(err => {
+                console.error(`[Batch Polling] ❌ Post-processing error:`, err);
+                File.updateProcessingStatus(fileId, "error", 42.0, "Post-processing failed");
+              });
+            });
+        }
         
         clearInterval(pollInterval);
         return;
@@ -461,27 +479,15 @@ async function processBatchResults(file_id, job) {
       return;
     }
 
-    // STAGE 4: Generate embeddings (58-76%)
-    await updateProgress(file_id, "processing", 59, "Preparing for embedding generation");
-    
+    // STAGE 4: Prepare background embedding job (58-68%)
+    await updateProgress(file_id, "processing", 59, "Preparing embedding queue payload");
     const chunkContents = chunks.map(c => c.content);
-    console.log(`[Embeddings] 🔄 Generating for ${chunkContents.length} chunks`);
-    
-    await smoothProgressIncrement(file_id, "processing", 60, 65, "Connecting to embedding service", 100);
-    await smoothProgressIncrement(file_id, "processing", 66, 72, "Generating embeddings", 150);
-    
-    const embeddings = await generateEmbeddings(chunkContents);
-    console.log(`[Embeddings] ✅ Generated ${embeddings.length} embeddings`);
-    
-    await smoothProgressIncrement(file_id, "processing", 73, 76, "Embeddings completed", 100);
+    console.log(`[Embeddings] 🔄 Queueing ${chunkContents.length} chunks for background embedding`);
+    await smoothProgressIncrement(file_id, "processing", 60, 66, "Collecting chunk metadata", 100);
 
-    if (chunks.length !== embeddings.length) {
-      throw new Error(`Mismatch: ${chunks.length} chunks vs ${embeddings.length} embeddings`);
-    }
+    // STAGE 5: Save chunks (68-78%)
+    await updateProgress(file_id, "processing", 67, "Preparing database storage");
 
-    // STAGE 5: Save chunks (76-82%)
-    await updateProgress(file_id, "processing", 77, "Preparing database storage");
-    
     const chunksToSave = chunks.map((chunk, i) => ({
       file_id: file_id,
       chunk_index: i,
@@ -492,65 +498,58 @@ async function processBatchResults(file_id, job) {
       heading: chunk.metadata.heading,
     }));
     
-    await smoothProgressIncrement(file_id, "processing", 78, 80, "Saving chunks to database", 100);
+    await smoothProgressIncrement(file_id, "processing", 68, 72, "Saving chunks to database", 100);
     
     const savedChunks = await FileChunk.saveMultipleChunks(chunksToSave);
     console.log(`[Database] ✅ Saved ${savedChunks.length} chunks`);
     
-    await smoothProgressIncrement(file_id, "processing", 81, 82, `${savedChunks.length} chunks saved`, 100);
+    await smoothProgressIncrement(file_id, "processing", 73, 78, `${savedChunks.length} chunks saved`, 100);
 
-    // STAGE 6: Save vectors (82-88%)
-    await updateProgress(file_id, "processing", 83, "Preparing vector storage");
-    
-    const vectorsToSave = savedChunks.map(savedChunk => {
-      const embedding = embeddings[savedChunk.chunk_index];
+    // STAGE 6: Queue vectors for background worker (78% -> embedding_pending)
+    const embeddingQueuePayload = savedChunks.map((savedChunk) => {
+      const source = chunks[savedChunk.chunk_index];
       return {
-        chunk_id: savedChunk.id,
-        embedding: embedding,
-        file_id: file_id,
+        chunkId: savedChunk.id,
+        chunkIndex: savedChunk.chunk_index,
+        content: source.content,
+        tokenCount: source.token_count,
       };
     });
-    
-    await smoothProgressIncrement(file_id, "processing", 84, 86, "Storing vector embeddings", 100);
-    
-    await ChunkVector.saveMultipleChunkVectors(vectorsToSave);
-    console.log(`[Database] ✅ Saved ${vectorsToSave.length} vectors`);
-    
-    await smoothProgressIncrement(file_id, "processing", 87, 88, "Vectors stored", 100);
 
-    // STAGE 7: Generate summary (88-96%)
-    await updateProgress(file_id, "processing", 89, "Preparing summary generation");
+    await enqueueEmbeddingJob({
+      fileId: file_id,
+      jobId: job.job_id,
+      chunks: embeddingQueuePayload,
+      progressBase: 78,
+    });
+
+    await updateProgress(file_id, "embedding_pending", 78, "Embeddings queued for background worker");
+
+    // STAGE 7: Generate summary (78-88%)
+    await updateProgress(file_id, "embedding_pending", 79, "Preparing summary generation");
     
     const fullText = chunks.map(c => c.content).join("\n\n");
     let summary = null;
     
     try {
       if (fullText.length > 0) {
-        await smoothProgressIncrement(file_id, "processing", 90, 93, "Generating AI summary", 150);
+        await smoothProgressIncrement(file_id, "embedding_pending", 80, 86, "Generating AI summary", 150);
         
         summary = await getSummaryFromChunks(chunks.map(c => c.content));
         await File.updateSummary(file_id, summary);
         
         console.log(`[Summary] ✅ Generated and saved`);
-        await smoothProgressIncrement(file_id, "processing", 94, 96, "Summary saved", 100);
+        await updateProgress(file_id, "embedding_pending", 88, "Summary saved");
       } else {
-        await updateProgress(file_id, "processing", 96, "Summary skipped (empty content)");
+        await updateProgress(file_id, "embedding_pending", 88, "Summary skipped (empty content)");
       }
     } catch (summaryError) {
       console.warn(`⚠️ [Warning] Summary generation failed:`, summaryError.message);
-      await updateProgress(file_id, "processing", 96, "Summary skipped (error)");
+      await updateProgress(file_id, "embedding_pending", 88, "Summary skipped (error)");
     }
 
-    // STAGE 8: Finalize (96-100%)
-    await updateProgress(file_id, "processing", 97, "Updating metadata");
-    await smoothProgressIncrement(file_id, "processing", 98, 99, "Finalizing", 100);
-    
-    await updateProgress(file_id, "processed", 100, "Processing completed");
-    await ProcessingJob.updateJobStatus(job.job_id, "completed");
-    
-    console.log(`\n${"=".repeat(80)}`);
-    console.log(`✅ [COMPLETE] File ID: ${file_id} - 100%`);
-    console.log(`${"=".repeat(80)}\n`);
+    await updateProgress(file_id, "embedding_pending", 89, "Waiting for background embeddings to complete");
+    console.log(`[Embeddings] Background task enqueued for file ${file_id}`);
 
   } catch (error) {
     console.error(`\n❌ [ERROR] Post-processing failed for ${file_id}:`, error.message);
@@ -3189,8 +3188,8 @@ exports.getFolderProcessingStatus = async (req, res) => {
 exports.getFileProcessingStatus = async (req, res) => {
   try {
     const { file_id } = req.params;
-    if (!file_id) {
-      return res.status(400).json({ error: "file_id is required." });
+    if (!file_id || file_id === 'undefined') {
+      return res.status(400).json({ error: "A valid file_id is required." });
     }
 
     const file = await File.getFileById(file_id);
@@ -3263,6 +3262,23 @@ exports.getFileProcessingStatus = async (req, res) => {
       });
     }
 
+    // Check if another process has already locked this file for processing
+    const preProcessFile = await File.getFileById(file_id);
+    if (preProcessFile.status === "processing_locked") {
+      console.log(`[getFileProcessingStatus] 🔒 File ${file_id} is already being processed. Aborting duplicate trigger.`);
+      return res.json({
+        file_id: file.id,
+        status: "processing",
+        processing_progress: file.processing_progress,
+        job_status: "running",
+        job_error: null,
+        last_updated: file.updated_at,
+      });
+    }
+    
+    // Acquire lock
+    await File.updateProcessingStatus(file_id, "processing_locked", 75.0);
+
     const bucketName = fileOutputBucket.name;
     const prefix = job.gcs_output_uri_prefix.replace(`gs://${bucketName}/`, "");
     const extractedBatchTexts = await fetchBatchResults(bucketName, prefix);
@@ -3270,8 +3286,6 @@ exports.getFileProcessingStatus = async (req, res) => {
     if (!extractedBatchTexts || extractedBatchTexts.length === 0) {
       throw new Error("Could not extract any meaningful text content from batch document.");
     }
-
-    await File.updateProcessingStatus(file_id, "processing", 75.0);
 
     // Dynamically determine chunking method from secret_manager → chunking_methods
     let batchChunkingMethod = "recursive"; // Default fallback
@@ -3298,7 +3312,7 @@ exports.getFileProcessingStatus = async (req, res) => {
       console.log(`[getFileProcessingStatus] Falling back to default chunking method: recursive`);
     }
 
-    const chunks = await chunkDocument(extractedBatchTexts, file_id, batchChunkingMethod);
+    const chunks = await chunkDocument(extractedBatchTexts, file_id, batchChunkingMethod || 'recursive');
 
     if (chunks.length === 0) {
       await File.updateProcessingStatus(file_id, "processed", 100.0);
@@ -3345,7 +3359,7 @@ exports.getFileProcessingStatus = async (req, res) => {
     try {
       if (chunks.length > 0) {
         // FIX: Pass the array of chunk objects directly to the summary function
-        summary = await getSummaryFromChunks(chunks);
+        summary = await getSummaryFromChunks(chunks.map(c => c.content));
         await File.updateSummary(file_id, summary);
       }
     } catch (summaryError) {
@@ -4103,7 +4117,12 @@ exports.getCaseFilesByFolderName = async (req, res) => {
     const filesWithUrls = await Promise.all(
       files.map(async (file) => {
         const previewUrl = await makeSignedReadUrl(file.gcs_path, 15);
-        return { ...file, previewUrl };
+        const viewUrl = await makeSignedReadUrl(file.gcs_path, 60); // Longer expiry for viewing
+        return { 
+          ...file, 
+          previewUrl,
+          viewUrl, // Direct URL to open/view the document
+        };
       })
     );
 
@@ -4126,6 +4145,181 @@ exports.getCaseFilesByFolderName = async (req, res) => {
       error: "Internal server error",
       details: error.message,
     });
+  }
+};
+
+/* ---------------------- View/Open Document ---------------------- */
+/**
+ * Get a signed URL to view/open a document directly
+ * @route GET /files/:fileId/view
+ */
+exports.viewDocument = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { fileId } = req.params;
+    const { expiryMinutes = 60 } = req.query; // Default 60 minutes
+
+    if (!fileId) {
+      return res.status(400).json({ error: "File ID is required" });
+    }
+
+    console.log(`👁️ [viewDocument] User: ${userId}, FileId: ${fileId}`);
+
+    // Fetch the file from database
+    const fileQuery = `
+      SELECT 
+        id,
+        user_id,
+        originalname,
+        gcs_path,
+        folder_path,
+        mimetype,
+        size,
+        status,
+        is_folder,
+        created_at
+      FROM user_files
+      WHERE id = $1 AND user_id = $2 AND is_folder = false;
+    `;
+    const { rows } = await pool.query(fileQuery, [fileId, userId]);
+
+    if (rows.length === 0) {
+      console.warn(`⚠️ File ${fileId} not found for user ${userId}`);
+      return res.status(404).json({
+        error: "Document not found or you don't have permission to access it.",
+      });
+    }
+
+    const file = rows[0];
+    
+    // Check if file exists in GCS
+    const fileRef = bucket.file(file.gcs_path);
+    const [exists] = await fileRef.exists();
+    
+    if (!exists) {
+      console.error(`❌ File ${file.gcs_path} not found in GCS`);
+      return res.status(404).json({
+        error: "Document file not found in storage.",
+      });
+    }
+
+    // Generate signed URL for viewing
+    const viewUrl = await makeSignedReadUrl(file.gcs_path, parseInt(expiryMinutes));
+
+    console.log(`✅ Generated view URL for file: ${file.originalname}`);
+
+    return res.status(200).json({
+      message: "Document view URL generated successfully.",
+      document: {
+        id: file.id,
+        name: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size,
+        status: file.status,
+        folder_path: file.folder_path,
+        created_at: file.created_at,
+      },
+      viewUrl,
+      expiresIn: `${expiryMinutes} minutes`,
+    });
+
+  } catch (error) {
+    console.error("❌ viewDocument error:", error);
+    return res.status(500).json({
+      error: "Internal server error",
+      details: error.message,
+    });
+  }
+};
+
+/* ---------------------- Stream/Download Document ---------------------- */
+/**
+ * Stream a document directly to the browser for inline viewing
+ * @route GET /files/:fileId/stream
+ */
+exports.streamDocument = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { fileId } = req.params;
+    const { download = false } = req.query; // Download vs inline viewing
+
+    if (!fileId) {
+      return res.status(400).json({ error: "File ID is required" });
+    }
+
+    console.log(`📥 [streamDocument] User: ${userId}, FileId: ${fileId}, Download: ${download}`);
+
+    // Fetch the file from database
+    const fileQuery = `
+      SELECT 
+        id,
+        user_id,
+        originalname,
+        gcs_path,
+        mimetype,
+        size,
+        is_folder
+      FROM user_files
+      WHERE id = $1 AND user_id = $2 AND is_folder = false;
+    `;
+    const { rows } = await pool.query(fileQuery, [fileId, userId]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        error: "Document not found or you don't have permission to access it.",
+      });
+    }
+
+    const file = rows[0];
+    
+    // Get file from GCS
+    const fileRef = bucket.file(file.gcs_path);
+    const [exists] = await fileRef.exists();
+    
+    if (!exists) {
+      return res.status(404).json({
+        error: "Document file not found in storage.",
+      });
+    }
+
+    // Get file metadata
+    const [metadata] = await fileRef.getMetadata();
+
+    // Set appropriate headers
+    const contentDisposition = download === 'true' || download === true
+      ? `attachment; filename="${file.originalname}"`
+      : `inline; filename="${file.originalname}"`;
+
+    res.setHeader('Content-Type', file.mimetype || 'application/octet-stream');
+    res.setHeader('Content-Disposition', contentDisposition);
+    res.setHeader('Content-Length', metadata.size || file.size);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+
+    // Stream the file
+    const readStream = fileRef.createReadStream();
+    
+    readStream.on('error', (error) => {
+      console.error(`❌ Stream error for file ${fileId}:`, error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          error: "Error streaming document",
+          details: error.message,
+        });
+      }
+    });
+
+    readStream.pipe(res);
+
+    console.log(`✅ Streaming file: ${file.originalname}`);
+
+  } catch (error) {
+    console.error("❌ streamDocument error:", error);
+    if (!res.headersSent) {
+      return res.status(500).json({
+        error: "Internal server error",
+        details: error.message,
+      });
+    }
   }
 };
 

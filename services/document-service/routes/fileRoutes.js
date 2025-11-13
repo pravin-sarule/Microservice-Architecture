@@ -65,6 +65,9 @@ router.get("/:folderName/chats", authMiddleware.protect, fileController.getFolde
 
 router.get("/:folderName/files", authMiddleware.protect, fileController.getCaseFilesByFolderName)
 
+// View/Open document endpoints
+router.get("/document/:fileId/view", authMiddleware.protect, fileController.viewDocument);
+router.get("/document/:fileId/stream", authMiddleware.protect, fileController.streamDocument);
 
 router.delete("/:fileId", authMiddleware.protect, fileController.deleteDocument);
 

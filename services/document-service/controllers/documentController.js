@@ -921,7 +921,7 @@ async function processDocument(
    // Poll for batch completion and continue processing
    let batchCompleted = false;
    let attempts = 0;
-   const maxAttempts = 120; // 10 minutes max
+   const maxAttempts = 240; // 20 minutes max
    
    while (!batchCompleted && attempts < maxAttempts) {
      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
@@ -979,7 +979,7 @@ async function processDocument(
    }
    
    if (!batchCompleted) {
-     throw new Error("Batch processing timeout after 10 minutes");
+     throw new Error("Batch processing timeout after 20 minutes");
    }
  }
  } else {
@@ -4606,6 +4606,7 @@ exports.getDocumentProcessingStatus = async (req, res) => {
 
       // Batch still running
       if (!operationStatus.done) {
+        console.log(`[getDocumentProcessingStatus] Batch operation for ${file_id} is still running.`);
         // Smoothly progress from 5% to 42%
         const newProgress = Math.min(currentProgress + 2, 42);
 
@@ -4804,10 +4805,11 @@ exports.batchUploadDocuments = async (req, res) => {
  const gcsOutputUriPrefix = `gs://${fileOutputBucket.name}/${outputPrefix}`;
 
  // Start DocAI Batch Operation
+ console.log(`[batchUploadDocuments] Starting Document AI batch processing for ${originalFilename}`);
  const operationName = await batchProcessDocument(
- [gcsInputUri],
- gcsOutputUriPrefix,
- mimeType
+   [gcsInputUri],
+   gcsOutputUriPrefix,
+   mimeType
  );
 
  // Save file metadata

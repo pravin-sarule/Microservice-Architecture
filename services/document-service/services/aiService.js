@@ -905,9 +905,22 @@ async function callSinglePrompt(provider, prompt, context = '') {
 // ---------------------------
 // Exports
 // ---------------------------
+async function getSummaryFromChunks(chunks) {
+  if (!chunks || chunks.length === 0) {
+    return null;
+  }
+  const combinedText = chunks.join('\n\n');
+  const prompt = `Provide a concise summary of the following text:\n\n${combinedText}`;
+  
+  // Use the existing askLLM function to get the summary
+  const summary = await askLLM('gemini', prompt);
+  return summary;
+}
+
 module.exports = {
   askLLM,
   resolveProviderName,
   getAvailableProviders,
+  getSummaryFromChunks,
 };
 

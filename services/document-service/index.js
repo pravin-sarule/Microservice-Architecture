@@ -18,6 +18,9 @@ const secretManagerRoutes = require('./routes/secretManagerRoutes');
 const fileRoutes = require('./routes/fileRoutes');
 const contentRoutes = require('./routes/contentRoutes');
 
+const { warmQueue } = require('./queues/embeddingQueue');
+const { startEmbeddingWorker } = require('./workers/embeddingWorker');
+
 const app = express();
 
 // Middleware
@@ -70,6 +73,11 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
+
+if (process.env.EMBEDDING_WORKER_DISABLED !== 'true') {
+  warmQueue();
+  startEmbeddingWorker();
+}
 
 // Graceful shutdown
 process.on('unhandledRejection', (err) => {
