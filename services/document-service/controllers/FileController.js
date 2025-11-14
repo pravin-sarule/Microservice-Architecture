@@ -85,6 +85,37 @@ async function makeSignedReadUrl(objectKey, minutes = 15) {
   return signedUrl;
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CONVERSATION_HISTORY_TURNS = 5;
+
+function formatFolderConversationHistory(chats = [], limit = CONVERSATION_HISTORY_TURNS) {
+  if (!Array.isArray(chats) || chats.length === 0) return '';
+  const recentChats = chats.slice(-limit);
+  return recentChats
+    .map((chat, idx) => {
+      const turnNumber = chats.length - recentChats.length + idx + 1;
+      return `Turn ${turnNumber}:\nUser: ${chat.question || ''}\nAssistant: ${chat.answer || ''}`;
+    })
+    .join('\n\n');
+}
+
+function simplifyFolderHistory(chats = []) {
+  if (!Array.isArray(chats)) return [];
+  return chats
+    .map((chat) => ({
+      id: chat.id,
+      question: chat.question,
+      answer: chat.answer,
+      created_at: chat.created_at,
+    }))
+    .filter((entry) => typeof entry.question === 'string' && typeof entry.answer === 'string');
+}
+
+function appendFolderConversation(prompt, conversationText) {
+  if (!conversationText) return prompt;
+  return `You are continuing a multi-turn chat for a folder-level analysis. Maintain context with earlier exchanges.\n\nPrevious Conversation:\n${conversationText}\n\n---\n\n${prompt}`;
+}
+
 
 // Progress stage definitions
 const PROGRESS_STAGES = {
@@ -1804,7 +1835,12 @@ exports.getFolderSummary = async (req, res) => {
       `Summary for folder "${folderName}"`,
       summary,
       null,
-      processed.map(f => f.id)
+      processed.map(f => f.id),
+      [],
+      false,
+      null,
+      null,
+      []
     );
 
     return res.json({
@@ -2773,8 +2809,9 @@ exports.queryFolderDocuments = async (req, res) => {
       return res.status(400).json({ error: "folderName is required." });
     }
 
-    const finalSessionId = session_id || `session-${Date.now()}`;
-    console.log(`📁 Querying folder: ${folderName} | used_secret_prompt=${used_secret_prompt} | secret_id=${secret_id}`);
+    const hasExistingSession = session_id && UUID_REGEX.test(session_id);
+    const finalSessionId = hasExistingSession ? session_id : uuidv4();
+    console.log(`📁 Querying folder: ${folderName} | used_secret_prompt=${used_secret_prompt} | secret_id=${secret_id} | session_id=${finalSessionId}`);
 
     // 1️⃣ Get user plan & usage
     const { usage, plan, timeLeft } = await TokenUsageService.getUserUsageAndPlan(
@@ -2801,6 +2838,21 @@ exports.queryFolderDocuments = async (req, res) => {
 
     console.log(`📄 Found ${files.length} processed files in folder "${folderName}"`);
 
+    let previousChats = [];
+    if (hasExistingSession) {
+      previousChats = await FolderChat.getFolderChatHistory(userId, folderName, finalSessionId);
+    }
+    const conversationContext = formatFolderConversationHistory(previousChats);
+    const historyForStorage = simplifyFolderHistory(previousChats);
+    if (historyForStorage.length > 0) {
+      const lastTurn = historyForStorage[historyForStorage.length - 1];
+      console.log(
+        `[queryFolderDocuments] Using ${historyForStorage.length} prior turn(s) for context. Most recent: Q="${(lastTurn.question || '').slice(0, 120)}", A="${(lastTurn.answer || '').slice(0, 120)}"`
+      );
+    } else {
+      console.log('[queryFolderDocuments] No prior context for this session.');
+    }
+
     // 3️⃣ ✅ RAG Configuration
     const SIMILARITY_THRESHOLD = 0.75; // Cosine similarity cutoff
     const MIN_CHUNKS = 5; // Minimum chunks to retrieve
@@ -2816,6 +2868,7 @@ exports.queryFolderDocuments = async (req, res) => {
     let displayQuestion;
     let finalPromptLabel = prompt_label;
     let provider = "gemini";
+    let llmContext = "";
 
     // ================================
     // CASE 1: SECRET PROMPT
@@ -2948,6 +3001,8 @@ exports.queryFolderDocuments = async (req, res) => {
 
       console.log(`📊 Final context: ${combinedContext.length} chars (~${Math.ceil(combinedContext.length / CHARS_PER_TOKEN)} tokens, ${((combinedContext.length / CHARS_PER_TOKEN) / 32000 * 100).toFixed(1)}% of 32k limit)`);
 
+      llmContext = combinedContext;
+
       // ✅ Build minimal prompt
       let finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n`;
       finalPrompt += `${secretValue}\n\n=== RELEVANT DOCUMENTS (FOLDER: "${folderName}") ===\n${combinedContext}`;
@@ -2957,7 +3012,9 @@ exports.queryFolderDocuments = async (req, res) => {
         finalPrompt += `\n\n=== ADDITIONAL INPUT ===\n${trimmedInput}`;
       }
 
-      answer = await askFolderLLMService(provider, finalPrompt);
+      finalPrompt = appendFolderConversation(finalPrompt, conversationContext);
+
+      answer = await askFolderLLMService(provider, finalPrompt, '', llmContext);
      
       console.log(`✅ Secret prompt processed: "${secretName}"`);
     }
@@ -3107,7 +3164,16 @@ exports.queryFolderDocuments = async (req, res) => {
 
       console.log(`📊 Final context: ${combinedContext.length} chars (~${Math.ceil(combinedContext.length / CHARS_PER_TOKEN)} tokens, ${((combinedContext.length / CHARS_PER_TOKEN) / 32000 * 100).toFixed(1)}% of 32k limit)`);
 
-      answer = await askFolderLLMService(provider, question, "", combinedContext);
+      llmContext = combinedContext;
+
+      let finalPrompt = `${storedQuestion}\n\n=== RELEVANT DOCUMENTS (FOLDER: "${folderName}") ===\n${combinedContext}`;
+      if (additional_input?.trim()) {
+        finalPrompt += `\n\n=== ADDITIONAL USER INPUT ===\n${additional_input.trim().substring(0, 500)}`;
+      }
+
+      finalPrompt = appendFolderConversation(finalPrompt, conversationContext);
+
+      answer = await askFolderLLMService(provider, finalPrompt, '', llmContext);
      
       console.log(`✅ Custom question processed`);
     }
@@ -3129,7 +3195,8 @@ exports.queryFolderDocuments = async (req, res) => {
       usedChunkIds,
       used_secret_prompt,
       finalPromptLabel,
-      secret_id
+      secret_id,
+      historyForStorage
     );
 
     if (chatCost && !used_secret_prompt) {
@@ -3139,7 +3206,7 @@ exports.queryFolderDocuments = async (req, res) => {
     // 6️⃣ Return response
     return res.json({
       success: true,
-      session_id: finalSessionId,
+      session_id: savedChat.session_id,
       answer,
       response: answer,
       llm_provider: provider,
@@ -3153,6 +3220,7 @@ exports.queryFolderDocuments = async (req, res) => {
       timestamp: new Date().toISOString(),
       displayQuestion: displayQuestion,
       storedQuestion: storedQuestion,
+      chat_history: savedChat.chat_history || [],
     });
   } catch (error) {
     console.error("❌ Error in queryFolderDocuments:", error);
@@ -3630,6 +3698,17 @@ exports.continueFolderChat = async (req, res) => {
       });
     }
 
+    const conversationContext = formatFolderConversationHistory(existingChats);
+    const historyForStorage = simplifyFolderHistory(existingChats);
+    if (historyForStorage.length > 0) {
+      const lastTurn = historyForStorage[historyForStorage.length - 1];
+      console.log(
+        `[continueFolderChat] Using ${historyForStorage.length} prior turn(s) for context. Most recent: Q="${(lastTurn.question || '').slice(0, 120)}", A="${(lastTurn.answer || '').slice(0, 120)}"`
+      );
+    } else {
+      console.log('[continueFolderChat] No prior context for this session.');
+    }
+
     // Get all processed files in the folder
     const files = await File.findByUserIdAndFolderPath(userId, folderName);
     const processedFiles = files.filter(f => !f.is_folder && f.status === "processed");
@@ -3676,14 +3755,24 @@ exports.continueFolderChat = async (req, res) => {
         [], // usedChunkIds - will be populated by vector search
         used_secret_prompt,
         prompt_label,
-        secret_id
+        secret_id,
+        historyForStorage
       );
+
+      const newChatEntry = {
+        id: savedChat.id,
+        question,
+        answer,
+        created_at: savedChat.created_at,
+        used_secret_prompt,
+        prompt_label,
+      };
 
       return res.json({
         answer,
         sources: [],
         sessionId,
-        chatHistory: [...existingChats, savedChat].map(chat => ({
+        chatHistory: [...existingChats, newChatEntry].map(chat => ({
           question: chat.question,
           response: chat.answer,
           timestamp: chat.created_at || chat.created_at,
@@ -3694,14 +3783,10 @@ exports.continueFolderChat = async (req, res) => {
           question,
           response: answer,
           timestamp: savedChat.created_at
-        }
+        },
+        chat_history: savedChat.chat_history || [],
       });
     }
-
-    // Build conversation context from previous messages
-    const conversationContext = existingChats
-      .map(chat => `Q: ${chat.question}\nA: ${chat.answer}`)
-      .join('\n\n---\n\n');
 
     // Token cost (rough estimate)
     chatCost = Math.ceil(question.length / 100) + Math.ceil(allChunks.reduce((sum, c) => sum + c.content.length, 0) / 200) + Math.ceil(conversationContext.length / 200); // Question tokens + context tokens + history tokens
@@ -3796,29 +3881,27 @@ exports.continueFolderChat = async (req, res) => {
     ).join("\n\n---\n\n");
 
     // Enhanced prompt with conversation context
-    const prompt = `
+    let prompt = `
 You are an AI assistant continuing a conversation about documents in folder "${folderName}".
- 
-PREVIOUS CONVERSATION:
-${conversationContext}
- 
+
 CURRENT QUESTION: "${question}"
- 
+
 RELEVANT DOCUMENT CONTENT:
 ${contextText}
- 
+
 INSTRUCTIONS:
-1. Consider the conversation history when answering the current question
-2. If the question refers to previous responses (e.g., "tell me more about that", "what else", "can you elaborate"), use the conversation context
-3. Provide a comprehensive answer based on both the conversation history and document content
-4. Use specific details, quotes, and examples from the documents when possible
-5. If information spans multiple documents, clearly indicate which documents contain what information
-6. Maintain conversational flow and reference previous parts of the conversation when relevant
-7. Be thorough and helpful - synthesize information across all relevant documents
- 
-Provide your answer:`;
- 
-    const answer = await askFolderLLM(provider, question, contextText, existingChats.map(chat => ({ question: chat.question, answer: chat.answer })), contextText); // Use askFolderLLM
+1. Consider the conversation history when answering the current question.
+2. If the question refers to previous responses (e.g., "tell me more about that", "what else", "can you elaborate"), use the conversation context.
+3. Provide a comprehensive answer based on both the conversation history and document content.
+4. Use specific details, quotes, and examples from the documents when possible.
+5. If information spans multiple documents, clearly indicate which documents contain what information.
+6. Maintain conversational flow and reference previous parts of the conversation when relevant.
+7. Be thorough and helpful - synthesize information across all relevant documents.
+`;
+
+    prompt = appendFolderConversation(prompt, conversationContext);
+
+    const answer = await askFolderLLMService(provider, prompt, '', contextText);
     console.log(`[continueFolderChat] Generated answer length: ${answer.length} characters`);
 
     // Save the new chat message
@@ -3829,7 +3912,11 @@ Provide your answer:`;
       answer,
       sessionId,
       processedFiles.map(f => f.id),
-      relevantChunks.map(c => c.id) // usedChunkIds
+      relevantChunks.map(c => c.id), // usedChunkIds
+      used_secret_prompt,
+      prompt_label,
+      secret_id,
+      historyForStorage
     );
 
     // 3. Increment usage after successful AI chat
@@ -3844,12 +3931,20 @@ Provide your answer:`;
     }));
 
     // Return complete chat history plus new message
-    const fullChatHistory = [...existingChats, savedChat].map(chat => ({
+    const newChatEntry = {
+      id: savedChat.id,
+      question,
+      answer,
+      created_at: savedChat.created_at,
+      used_chunk_ids: relevantChunks.map(c => c.id),
+      used_secret_prompt,
+      prompt_label,
+    };
+
+    const fullChatHistory = [...existingChats, newChatEntry].map(chat => ({
       question: chat.question,
       response: chat.answer,
       timestamp: chat.created_at,
-      usedChunkIds: chat.used_chunk_ids || [],
-      usedChunkIds: chat.used_chunk_ids || [],
       usedChunkIds: chat.used_chunk_ids || [],
       used_secret_prompt: chat.used_secret_prompt || false,
       prompt_label: chat.prompt_label || null,
@@ -3869,7 +3964,8 @@ Provide your answer:`;
       documentsSearched: processedFiles.length,
       chunksFound: relevantChunks.length,
       totalMessages: fullChatHistory.length,
-      searchMethod: questionWords.length > 0 ? 'keyword_search' : 'document_sampling'
+      searchMethod: questionWords.length > 0 ? 'keyword_search' : 'document_sampling',
+      chat_history: savedChat.chat_history || [],
     });
 
   } catch (error) {

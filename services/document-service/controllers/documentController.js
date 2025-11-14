@@ -45,6 +45,36 @@ const { DOCUMENT_UPLOAD_COST_TOKENS } = require("../middleware/checkTokenLimits"
 
 const { v4: uuidv4 } = require("uuid");
 
+const CONVERSATION_HISTORY_TURNS = 5;
+
+function formatConversationHistory(chats = [], limit = CONVERSATION_HISTORY_TURNS) {
+  if (!Array.isArray(chats) || chats.length === 0) return '';
+  const recentChats = chats.slice(-limit);
+  return recentChats
+    .map((chat, idx) => {
+      const turnNumber = chats.length - recentChats.length + idx + 1;
+      return `Turn ${turnNumber}:\nUser: ${chat.question || ''}\nAssistant: ${chat.answer || ''}`;
+    })
+    .join('\n\n');
+}
+
+function simplifyHistory(chats = []) {
+  if (!Array.isArray(chats)) return [];
+  return chats
+    .map((chat) => ({
+      id: chat.id,
+      question: chat.question,
+      answer: chat.answer,
+      created_at: chat.created_at,
+    }))
+    .filter((entry) => typeof entry.question === 'string' && typeof entry.answer === 'string');
+}
+
+function appendConversationToPrompt(prompt, conversationText) {
+  if (!conversationText) return prompt;
+  return `You are continuing an existing conversation with the same user. Reference prior exchanges when helpful and keep the narrative consistent.\n\nPrevious Conversation:\n${conversationText}\n\n---\n\n${prompt}`;
+}
+
 /**
  * @description Uploads a document, saves its metadata, and initiates asynchronous processing.
  * @route POST /api/doc/upload
@@ -2235,10 +2265,11 @@ exports.chatWithDocument = async (req, res) => {
     if (!file_id) return res.status(400).json({ error: 'file_id is required.' });
     if (!uuidRegex.test(file_id)) return res.status(400).json({ error: 'Invalid file ID format.' });
 
-    const finalSessionId = session_id || `session-${Date.now()}`;
+    const hasExistingSession = session_id && uuidRegex.test(session_id);
+    const finalSessionId = hasExistingSession ? session_id : uuidv4();
 
     console.log(
-      `[chatWithDocument] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}`
+      `[chatWithDocument] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}, session_id=${finalSessionId}`
     );
 
     // ---------- FILE ACCESS ----------
@@ -2252,6 +2283,21 @@ exports.chatWithDocument = async (req, res) => {
         status: file.status,
         progress: file.processing_progress,
       });
+    }
+
+    let previousChats = [];
+    if (hasExistingSession) {
+      previousChats = await FileChat.getChatHistory(file_id, finalSessionId);
+    }
+    const conversationContext = formatConversationHistory(previousChats);
+    const historyForStorage = simplifyHistory(previousChats);
+    if (historyForStorage.length > 0) {
+      const lastTurn = historyForStorage[historyForStorage.length - 1];
+      console.log(
+        `[chatWithDocument] Using ${historyForStorage.length} prior turn(s) for context. Most recent: Q="${(lastTurn.question || '').slice(0, 120)}", A="${(lastTurn.answer || '').slice(0, 120)}"`
+      );
+    } else {
+      console.log('[chatWithDocument] No prior context for this session.');
     }
 
     // ✅ RAG CONFIGURATION
@@ -2506,9 +2552,11 @@ exports.chatWithDocument = async (req, res) => {
       }
     }
 
+    finalPrompt = appendConversationToPrompt(finalPrompt, conversationContext);
+
     // ---------- CALL LLM ----------
     console.log(`[chatWithDocument] Calling LLM provider: ${provider} | Chunks used: ${usedChunkIds.length}`);
-    const answer = await askLLM(provider, finalPrompt, { stream: false });
+    const answer = await askLLM(provider, finalPrompt);
 
     if (!answer?.trim()) {
       return res.status(500).json({ error: 'Empty response from AI.' });
@@ -2526,7 +2574,8 @@ exports.chatWithDocument = async (req, res) => {
       usedChunkIds,
       used_secret_prompt,
       finalPromptLabel,
-      used_secret_prompt ? secret_id : null
+      used_secret_prompt ? secret_id : null,
+      historyForStorage
     );
 
     console.log(`[chatWithDocument] Chat saved with ID: ${savedChat.id} | Chunks used: ${usedChunkIds.length}`);
@@ -2540,7 +2589,7 @@ exports.chatWithDocument = async (req, res) => {
     }
 
     // ---------- FETCH HISTORY ----------
-    const historyRows = await FileChat.getChatHistory(file_id, finalSessionId);
+    const historyRows = await FileChat.getChatHistory(file_id, savedChat.session_id);
     const history = historyRows.map((row) => ({
       id: row.id,
       file_id: row.file_id,
@@ -2553,6 +2602,7 @@ exports.chatWithDocument = async (req, res) => {
       used_chunk_ids: row.used_chunk_ids || [],
       confidence: row.confidence || 0.8,
       timestamp: row.created_at || row.timestamp,
+      chat_history: row.chat_history || [],
       display_text_left_panel: row.used_secret_prompt
         ? `Analysis: ${row.prompt_label || 'Secret Prompt'}`
         : row.question,
@@ -2561,7 +2611,7 @@ exports.chatWithDocument = async (req, res) => {
     // ---------- RETURN COMPLETE RESPONSE ----------
     return res.status(200).json({
       success: true,
-      session_id: finalSessionId,
+      session_id: savedChat.session_id,
       message_id: savedChat.id,
       answer,
       response: answer,

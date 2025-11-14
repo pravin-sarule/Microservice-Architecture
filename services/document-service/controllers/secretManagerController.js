@@ -12,6 +12,21 @@ const { v4: uuidv4 } = require('uuid');
 const File = require('../models/File'); // Import File model
 const FolderChat = require('../models/FolderChat'); // Import FolderChat model
 
+const MAX_STORED_HISTORY = 20;
+
+function simplifyFolderChatHistory(chats = []) {
+  if (!Array.isArray(chats)) return [];
+  return chats
+    .map((chat) => ({
+      id: chat.id,
+      question: chat.question,
+      answer: chat.answer,
+      created_at: chat.created_at,
+    }))
+    .filter((entry) => typeof entry.question === 'string' && typeof entry.answer === 'string')
+    .slice(-MAX_STORED_HISTORY);
+}
+
 let secretClient;
 
 // 🔐 Setup Google Secret Manager Client
@@ -575,6 +590,17 @@ const triggerAskLlmForFolder = async (req, res) => {
     console.log(`[triggerAskLlmForFolder] Storing chat in database...`);
     const summarizedFileIds = processedFiles.map((f) => f.id);
 
+    const existingHistory = await FolderChat.getFolderChatHistory(userId, folderName, finalSessionId);
+    const historyForStorage = simplifyFolderChatHistory(existingHistory);
+    if (historyForStorage.length > 0) {
+      const lastTurn = historyForStorage[historyForStorage.length - 1];
+      console.log(
+        `[triggerAskLlmForFolder] Using ${historyForStorage.length} prior turn(s) for context. Most recent: Q="${(lastTurn.question || '').slice(0, 120)}", A="${(lastTurn.answer || '').slice(0, 120)}"`
+      );
+    } else {
+      console.log('[triggerAskLlmForFolder] No prior context for this session.');
+    }
+
     const savedChat = await FolderChat.saveFolderChat(
       userId,
       folderName,
@@ -585,7 +611,8 @@ const triggerAskLlmForFolder = async (req, res) => {
       allChunks.map((c) => c.id), // usedChunkIds
       true, // used_secret_prompt = true
       secretName, // prompt_label
-      secretId
+      secretId,
+      historyForStorage
     );
 
     const messageId = savedChat.id;
@@ -609,6 +636,7 @@ const triggerAskLlmForFolder = async (req, res) => {
       secret_id: row.secret_id,
       summarized_file_ids: row.summarized_file_ids,
       timestamp: row.created_at,
+      chat_history: row.chat_history || [],
       display_text_left_panel: row.used_secret_prompt ? `Analysis: ${row.prompt_label}` : row.question,
     }));
 
