@@ -132,6 +132,33 @@ const LLM_CONFIGS = {
       'anthropic-version': '2023-06-01',
     },
   },
+  'claude-opus-4-1': {
+    apiUrl: 'https://api.anthropic.com/v1/messages',
+    model: 'claude-opus-4-1-20250805',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+  },
+  'claude-sonnet-4-5': {
+    apiUrl: 'https://api.anthropic.com/v1/messages',
+    model: 'claude-sonnet-4-5-20250929',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+  },
+  'claude-haiku-4-5': {
+    apiUrl: 'https://api.anthropic.com/v1/messages',
+    model: 'claude-haiku-4-5-20251001',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+  },
   deepseek: {
     apiUrl: 'https://api.deepseek.com/chat/completions',
     model: 'deepseek-chat',
@@ -186,6 +213,12 @@ const PROVIDER_ALIASES = {
   'claude': 'anthropic',
   'claude-3-5-haiku': 'anthropic',
   'claude-sonnet-4': 'claude-sonnet-4',
+  'claude-opus-4-1': 'claude-opus-4-1',
+  'claude-opus-4.1': 'claude-opus-4-1',
+  'claude-sonnet-4-5': 'claude-sonnet-4-5',
+  'claude-sonnet-4.5': 'claude-sonnet-4-5',
+  'claude-haiku-4-5': 'claude-haiku-4-5',
+  'claude-haiku-4.5': 'claude-haiku-4-5',
   deepseek: 'deepseek',
   'deepseek-chat': 'deepseek',
 };
@@ -249,7 +282,11 @@ async function callSinglePrompt(provider, prompt, context = '') {
         const model = genAI.getGenerativeModel(
           context ? { model: modelName, systemInstruction: context } : { model: modelName }
         );
-        const result = await model.generateContent(prompt);
+        const result = await model.generateContent(prompt, {
+          generationConfig: {
+            maxOutputTokens: 15000,
+          },
+        });
         const geminiResponse = await result.response.text();
         const inputTokens = result.response.usageMetadata?.promptTokenCount || 0;
         const outputTokens = result.response.usageMetadata?.candidatesTokenCount || 0;
@@ -274,7 +311,7 @@ async function callSinglePrompt(provider, prompt, context = '') {
   const payload = isClaude
     ? {
         model: config.model,
-        max_tokens: 2048, // ✅ REDUCED from 4096
+        max_tokens: 15000,
         system: context,
         messages,
       }

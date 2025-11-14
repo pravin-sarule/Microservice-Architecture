@@ -728,7 +728,34 @@ const LLM_CONFIGS = {
   },
   'claude-sonnet-4': {
     apiUrl: 'https://api.anthropic.com/v1/messages',
-    model: 'claude-3-5-sonnet-20241022',
+    model: 'claude-sonnet-4-20250514',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+  },
+  'claude-opus-4-1': {
+    apiUrl: 'https://api.anthropic.com/v1/messages',
+    model: 'claude-opus-4-1-20250805',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+  },
+  'claude-sonnet-4-5': {
+    apiUrl: 'https://api.anthropic.com/v1/messages',
+    model: 'claude-sonnet-4-5-20250929',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+  },
+  'claude-haiku-4-5': {
+    apiUrl: 'https://api.anthropic.com/v1/messages',
+    model: 'claude-haiku-4-5-20251001',
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': process.env.ANTHROPIC_API_KEY,
@@ -768,6 +795,12 @@ const PROVIDER_ALIASES = {
   claude: 'anthropic',
   anthropic: 'anthropic',
   'claude-sonnet-4': 'claude-sonnet-4',
+  'claude-opus-4-1': 'claude-opus-4-1',
+  'claude-opus-4.1': 'claude-opus-4-1',
+  'claude-sonnet-4-5': 'claude-sonnet-4-5',
+  'claude-sonnet-4.5': 'claude-sonnet-4-5',
+  'claude-haiku-4-5': 'claude-haiku-4-5',
+  'claude-haiku-4.5': 'claude-haiku-4-5',
   deepseek: 'deepseek',
   'deepseek-chat': 'deepseek',
 };
@@ -849,7 +882,11 @@ async function callSinglePrompt(provider, prompt, context = '') {
             ? { model: modelName, systemInstruction: context }
             : { model: modelName }
         );
-        const result = await model.generateContent(prompt);
+        const result = await model.generateContent(prompt, {
+          generationConfig: {
+            maxOutputTokens: 15000,
+          },
+        });
         const text = await result.response.text();
         const usage = result.response.usageMetadata || {};
         console.log(
@@ -874,7 +911,7 @@ async function callSinglePrompt(provider, prompt, context = '') {
   const payload = isClaude
     ? {
         model: config.model,
-        max_tokens: 10000,
+        max_tokens: 15000,
         messages,
         system: context,
       }

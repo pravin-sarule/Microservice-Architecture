@@ -23,6 +23,7 @@ const {
  getSummaryFromChunks,
  askLLM,
  resolveProviderName, // Add resolveProviderName here
+ getAvailableProviders, // Add getAvailableProviders here
 } = require("../services/aiService");
 const { extractText } = require("../utils/textExtractor");
 const {
@@ -2390,7 +2391,34 @@ exports.chatWithDocument = async (req, res) => {
         return res.status(400).json({ error: 'question is required.' });
 
       storedQuestion = question.trim();
-      provider = 'gemini';
+
+      // Fetch LLM model from custom_query table for custom queries (always fetch from DB)
+      let dbLlmName = null;
+      const customQueryLlm = `
+        SELECT cq.llm_name, cq.llm_model_id
+        FROM custom_query cq
+        ORDER BY cq.id DESC
+        LIMIT 1;
+      `;
+      const customQueryResult = await db.query(customQueryLlm);
+      if (customQueryResult.rows.length > 0) {
+        dbLlmName = customQueryResult.rows[0].llm_name;
+        console.log(`🤖 Using LLM from custom_query table: ${dbLlmName}`);
+      } else {
+        console.warn(`⚠️ No LLM found in custom_query table — falling back to gemini`);
+        dbLlmName = 'gemini';
+      }
+
+      // Resolve provider name using the LLM from custom_query table
+      provider = resolveProviderName(dbLlmName || "gemini");
+      console.log(`🤖 Resolved LLM provider for custom query: ${provider}`);
+      
+      // Check if provider is available
+      const availableProviders = getAvailableProviders();
+      if (!availableProviders[provider] || !availableProviders[provider].available) {
+        console.warn(`⚠️ Provider '${provider}' unavailable — falling back to gemini`);
+        provider = 'gemini';
+      }
 
       // ✅ Vector search with similarity scoring
       const questionEmbedding = await generateEmbedding(storedQuestion);

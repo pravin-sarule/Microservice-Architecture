@@ -1,5 +1,5 @@
 const { Worker, QueueEvents } = require('bullmq');
-const { redisConnection } = require('../config/redis');
+const { redisConnection, REDIS_DISABLED } = require('../config/redis');
 const { EMBEDDING_QUEUE_NAME } = require('../queues/embeddingQueue');
 const ChunkVector = require('../models/ChunkVector');
 const File = require('../models/File');
@@ -137,41 +137,52 @@ let workerInstance = null;
 let queueEvents = null;
 
 function startEmbeddingWorker() {
+  if (REDIS_DISABLED || !redisConnection) {
+    console.log('[EmbeddingWorker] ⚠️ Worker disabled (Redis is disabled)');
+    return null;
+  }
+
   if (workerInstance) {
     return workerInstance;
   }
 
-  workerInstance = new Worker(EMBEDDING_QUEUE_NAME, processJob, {
-    connection: redisConnection,
-    concurrency: Number(process.env.EMBEDDING_WORKER_CONCURRENCY || 2),
-  });
+  try {
+    workerInstance = new Worker(EMBEDDING_QUEUE_NAME, processJob, {
+      connection: redisConnection,
+      concurrency: Number(process.env.EMBEDDING_WORKER_CONCURRENCY || 2),
+    });
 
-  workerInstance.on('completed', (job) => {
-    console.log(`[EmbeddingWorker] Job ${job.id} completed`);
-  });
+    workerInstance.on('completed', (job) => {
+      console.log(`[EmbeddingWorker] Job ${job.id} completed`);
+    });
 
-  workerInstance.on('failed', async (job, error) => {
-    console.error(`[EmbeddingWorker] Job ${job?.id} failed`, error?.message || error);
-    if (job?.data?.fileId) {
-      await updateFileStatus(job.data.fileId, 'embedding_failed', 90);
-    }
-    if (job?.data?.jobId) {
-      await failProcessing(job.data.jobId, error?.message || 'Embedding worker failure');
-    }
-  });
+    workerInstance.on('failed', async (job, error) => {
+      console.error(`[EmbeddingWorker] Job ${job?.id} failed`, error?.message || error);
+      if (job?.data?.fileId) {
+        await updateFileStatus(job.data.fileId, 'embedding_failed', 90);
+      }
+      if (job?.data?.jobId) {
+        await failProcessing(job.data.jobId, error?.message || 'Embedding worker failure');
+      }
+    });
 
-  queueEvents = new QueueEvents(EMBEDDING_QUEUE_NAME, { connection: redisConnection });
-  queueEvents.on('waiting', ({ jobId }) => {
-    console.log(`[EmbeddingWorker] Job ${jobId} waiting in queue`);
-  });
+    queueEvents = new QueueEvents(EMBEDDING_QUEUE_NAME, { connection: redisConnection });
+    queueEvents.on('waiting', ({ jobId }) => {
+      console.log(`[EmbeddingWorker] Job ${jobId} waiting in queue`);
+    });
 
-  console.log('[EmbeddingWorker] Initialized');
-  return workerInstance;
+    console.log('[EmbeddingWorker] Initialized');
+    return workerInstance;
+  } catch (error) {
+    console.error('[EmbeddingWorker] Failed to initialize worker', error);
+    return null;
+  }
 }
 
 module.exports = {
   startEmbeddingWorker,
 };
+
 
 
 

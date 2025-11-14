@@ -27,7 +27,7 @@ const { getSignedUrl } = require("../services/folderService"); // Import from fo
 const { checkStorageLimit } = require("../utils/storage");
 const { bucket } = require("../config/gcs");
 const { askGemini, getSummaryFromChunks, askLLM, getAvailableProviders, resolveProviderName } = require("../services/aiService");
-const { askLLM: askFolderLLMService } = require("../services/folderAiService"); // Import askLLM from folderAiService and alias it
+const { askLLM: askFolderLLMService, resolveProviderName: resolveFolderProviderName, getAvailableProviders: getFolderAvailableProviders } = require("../services/folderAiService"); // Import askLLM, resolveProviderName, and getAvailableProviders from folderAiService
 const { extractText } = require("../utils/textExtractor");
 const {
   extractTextFromDocument,
@@ -2974,7 +2974,34 @@ exports.queryFolderDocuments = async (req, res) => {
       storedQuestion = question;
       displayQuestion = question;
       finalPromptLabel = null;
-      provider = "gemini";
+
+      // Fetch LLM model from custom_query table for custom queries (always fetch from DB)
+      let dbLlmName = null;
+      const customQueryLlm = `
+        SELECT cq.llm_name, cq.llm_model_id
+        FROM custom_query cq
+        ORDER BY cq.id DESC
+        LIMIT 1;
+      `;
+      const customQueryResult = await pool.query(customQueryLlm);
+      if (customQueryResult.rows.length > 0) {
+        dbLlmName = customQueryResult.rows[0].llm_name;
+        console.log(`🤖 Using LLM from custom_query table: ${dbLlmName}`);
+      } else {
+        console.warn(`⚠️ No LLM found in custom_query table — falling back to gemini`);
+        dbLlmName = 'gemini';
+      }
+
+      // Resolve provider name using the LLM from custom_query table
+      provider = resolveFolderProviderName(dbLlmName || "gemini");
+      console.log(`🤖 Resolved LLM provider for custom query: ${provider}`);
+      
+      // Check if provider is available
+      const availableProviders = getFolderAvailableProviders();
+      if (!availableProviders[provider] || !availableProviders[provider].available) {
+        console.warn(`⚠️ Provider '${provider}' unavailable — falling back to gemini`);
+        provider = 'gemini';
+      }
      
       // ✅ Vector search with similarity scoring
       const questionEmbedding = await generateEmbedding(question);
@@ -3742,6 +3769,26 @@ exports.continueFolderChat = async (req, res) => {
     }
 
     console.log(`[continueFolderChat] Found ${relevantChunks.length} relevant chunks`);
+
+    // Determine provider based on request type
+    let provider;
+    if (used_secret_prompt && secret_id) {
+      // Handle secret prompt - resolve provider from secret config
+      const { resolveProviderName: resolveFolderProviderName } = require('../services/folderAiService');
+      const secretQuery = `
+        SELECT s.llm_id, l.name AS llm_name
+        FROM secret_manager s
+        LEFT JOIN llm_models l ON s.llm_id = l.id
+        WHERE s.id = $1
+      `;
+      const secretResult = await pool.query(secretQuery, [secret_id]);
+      const dbLlmName = secretResult.rows[0]?.llm_name;
+      provider = resolveFolderProviderName(llm_name || dbLlmName || 'gemini');
+    } else {
+      // Custom query - use Claude Sonnet 4
+      provider = 'claude-sonnet-4';
+      console.log(`🤖 Using Claude Sonnet 4 for custom query in continueFolderChat`);
+    }
 
     // Prepare context for AI with conversation history
     const contextText = relevantChunks.map((chunk, index) =>

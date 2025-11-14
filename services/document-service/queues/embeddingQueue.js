@@ -1,5 +1,5 @@
 const { Queue } = require('bullmq');
-const { redisConnection } = require('../config/redis');
+const { redisConnection, REDIS_DISABLED } = require('../config/redis');
 
 const EMBEDDING_QUEUE_NAME = process.env.EMBEDDING_QUEUE_NAME || 'document-embedding-jobs';
 
@@ -18,13 +18,25 @@ const defaultJobOptions = {
   removeOnFail: false,
 };
 
-const embeddingQueue = new Queue(EMBEDDING_QUEUE_NAME, {
-  connection: redisConnection,
-  defaultJobOptions,
-  limiter,
-});
+// Only create queue if Redis is enabled
+let embeddingQueue = null;
+if (!REDIS_DISABLED && redisConnection) {
+  try {
+    embeddingQueue = new Queue(EMBEDDING_QUEUE_NAME, {
+      connection: redisConnection,
+      defaultJobOptions,
+      limiter,
+    });
+  } catch (error) {
+    console.error('[EmbeddingQueue] Failed to create queue', error);
+  }
+}
 
 async function warmQueue() {
+  if (REDIS_DISABLED || !embeddingQueue) {
+    console.log('[EmbeddingQueue] ⚠️ Queue disabled (Redis is disabled)');
+    return;
+  }
   try {
     await embeddingQueue.waitUntilReady();
     console.log(`[EmbeddingQueue] Ready (limiter=${limiter.max}/${limiter.duration}ms)`);
@@ -34,6 +46,16 @@ async function warmQueue() {
 }
 
 async function enqueueEmbeddingJob(payload, options = {}) {
+  if (REDIS_DISABLED || !embeddingQueue) {
+    console.log('[EmbeddingQueue] ⚠️ Skipping job enqueue (Redis is disabled):', payload.fileId);
+    // Return a mock job object to prevent errors
+    return {
+      id: `disabled:${payload.fileId}:${Date.now()}`,
+      data: payload,
+      remove: async () => {},
+      updateProgress: async () => {},
+    };
+  }
   const jobId = options.jobId || `embedding:${payload.fileId}:${Date.now()}`;
   return embeddingQueue.add('embed-chunks', payload, {
     jobId,
