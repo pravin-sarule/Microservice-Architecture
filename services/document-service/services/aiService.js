@@ -622,6 +622,7 @@
 require('dotenv').config();
 const axios = require('axios');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const pool = require('../config/db');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -783,6 +784,81 @@ const LLM_CONFIGS = {
   'gemini-pro-2.5': { model: 'gemini-2.5-pro' },
 };
 
+const llmTokenCache = new Map();
+
+function normalizeProviderForDb(provider = '') {
+  const key = provider.toLowerCase();
+  if (key.includes('claude') || key === 'anthropic') return 'anthropic';
+  if (key.startsWith('gemini')) return 'gemini';
+  if (key.startsWith('gpt-') || key.includes('openai')) return 'openai';
+  if (key.includes('deepseek')) return 'deepseek';
+  return provider;
+}
+
+async function queryMaxTokensByProvider(provider, modelName) {
+  const query = `
+    SELECT max_output_tokens
+    FROM llm_max_tokens
+    WHERE LOWER(provider) = LOWER($1)
+      AND LOWER(model_name) = LOWER($2)
+    ORDER BY updated_at DESC
+    LIMIT 1;
+  `;
+  const { rows } = await pool.query(query, [provider, modelName]);
+  return rows[0]?.max_output_tokens ?? null;
+}
+
+async function queryMaxTokensByModel(modelName) {
+  const query = `
+    SELECT max_output_tokens
+    FROM llm_max_tokens
+    WHERE LOWER(model_name) = LOWER($1)
+    ORDER BY updated_at DESC
+    LIMIT 1;
+  `;
+  const { rows } = await pool.query(query, [modelName]);
+  return rows[0]?.max_output_tokens ?? null;
+}
+
+async function getModelMaxTokens(provider, modelName) {
+  if (!modelName) {
+    throw new Error('LLM configuration missing model name when resolving max tokens.');
+  }
+
+  const cacheKey = `${provider.toLowerCase()}::${modelName.toLowerCase()}`;
+  if (llmTokenCache.has(cacheKey)) return llmTokenCache.get(cacheKey);
+
+  const providerCandidates = [provider];
+  const normalized = normalizeProviderForDb(provider);
+  if (normalized && normalized !== provider) providerCandidates.push(normalized);
+  providerCandidates.push(null); // final fallback: model-name only
+
+  for (const candidate of providerCandidates) {
+    let value = null;
+    try {
+      value =
+        candidate === null
+          ? await queryMaxTokensByModel(modelName)
+          : await queryMaxTokensByProvider(candidate, modelName);
+    } catch (err) {
+      console.error(`[LLM Max Tokens] Error querying max tokens for provider="${candidate}" model="${modelName}": ${err.message}`);
+      continue;
+    }
+
+    if (value != null) {
+      llmTokenCache.set(cacheKey, value);
+      console.log(
+        `[LLM Max Tokens] Using max_output_tokens=${value} for provider="${candidate || 'model-only'}" model="${modelName}"`
+      );
+      return value;
+    }
+  }
+
+  throw new Error(
+    `Max token configuration not found for provider="${provider}", model="${modelName}". Please insert a row into llm_max_tokens.`
+  );
+}
+
 // ---------------------------
 // Provider Resolver
 // ---------------------------
@@ -877,6 +953,8 @@ async function callSinglePrompt(provider, prompt, context = '') {
     const models = GEMINI_MODELS[provider] || GEMINI_MODELS['gemini'];
     for (const modelName of models) {
       try {
+        const maxOutputTokens = await getModelMaxTokens(provider, modelName);
+        console.log(`[LLM Max Tokens] Gemini model ${modelName} using maxOutputTokens=${maxOutputTokens}`);
         const model = genAI.getGenerativeModel(
           context
             ? { model: modelName, systemInstruction: context }
@@ -884,13 +962,13 @@ async function callSinglePrompt(provider, prompt, context = '') {
         );
         const result = await model.generateContent(prompt, {
           generationConfig: {
-            maxOutputTokens: 15000,
+            maxOutputTokens,
           },
         });
         const text = await result.response.text();
         const usage = result.response.usageMetadata || {};
         console.log(
-          `✅ Gemini (${modelName}) - Tokens used: ${usage.promptTokenCount || 0} + ${usage.candidatesTokenCount || 0}`
+          `✅ Gemini (${modelName}) - Tokens used: ${usage.promptTokenCount || 0} + ${usage.candidatesTokenCount || 0} | max=${maxOutputTokens}`
         );
         return text;
       } catch (err) {
@@ -908,19 +986,23 @@ async function callSinglePrompt(provider, prompt, context = '') {
         { role: 'user', content: prompt },
       ];
 
+  const resolvedModelName = config.model;
+  const maxTokens = await getModelMaxTokens(provider, resolvedModelName);
+
   const payload = isClaude
     ? {
         model: config.model,
-        max_tokens: 15000,
+        max_tokens: maxTokens,
         messages,
         system: context,
       }
     : {
         model: config.model,
         messages,
-        max_tokens: 10000,
+        max_tokens: maxTokens,
         temperature: 0.5,
       };
+  console.log(`[LLM Max Tokens] ${provider} model ${resolvedModelName} using max_tokens=${maxTokens}`);
 
   const response = await axios.post(config.apiUrl, payload, {
     headers: config.headers,
