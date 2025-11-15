@@ -337,318 +337,7 @@ exports.completeSignedUpload = async (req, res) => {
 };
 
 
-/**
- * @description Asynchronously processes a document by extracting text, chunking, generating embeddings, and summarizing.
- * Dynamically fetches chunking method from DB if a secret_id is provided.
- */
-// async function processDocument(fileId, fileBuffer, mimetype, userId, secretId = null) {
-// const jobId = uuidv4();
-// await ProcessingJobModel.createJob({
-// job_id: jobId,
-// file_id: fileId,
-// type: "synchronous",
-// document_ai_operation_name: null,
-// status: "queued",
-// secret_id: secretId, // Pass secretId to the job
-// });
 
-// await DocumentModel.updateFileStatus(fileId, "processing", 0.0);
-
-// let chunkingMethod = "recursive"; // Default fallback
-
-// try {
-// // ✅ Step 1: Determine chunking method dynamically
-// if (secretId) {
-// console.log(`[processDocument] Fetching chunking method for secret ID: ${secretId}`);
-// const secretQuery = `
-// SELECT chunking_method
-// FROM secret_manager
-// WHERE id = $1
-// `;
-// const result = await db.query(secretQuery, [secretId]);
-// if (result.rows.length > 0 && result.rows[0].chunking_method) {
-// chunkingMethod = result.rows[0].chunking_method;
-// console.log(`[processDocument] Using chunking method from DB: ${chunkingMethod}`);
-// } else {
-// console.warn(`[processDocument] No custom chunking method found for secret ID: ${secretId}. Using default: ${chunkingMethod}`);
-// }
-// } else {
-// console.log(`[processDocument] No secret_id provided. Using default chunking method: ${chunkingMethod}`);
-// }
-
-// // ✅ Step 2: Check if document is already processed
-// const file = await DocumentModel.getFileById(fileId);
-// if (file.status === "processed") {
-// console.log(`[processDocument] File ${fileId} already processed. Skipping re-processing.`);
-// await ProcessingJobModel.updateJobStatus(jobId, "completed");
-// return;
-// }
-
-// // ✅ Step 3: Extract text from document (OCR or direct)
-// let extractedTexts = [];
-// const ocrMimeTypes = [
-// "application/pdf", "image/png", "image/jpeg", "image/tiff",
-// "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-// "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-// "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-// "text/plain", "text/csv",
-// ];
-
-// const useOCR = ocrMimeTypes.includes(String(mimetype).toLowerCase());
-// if (useOCR) {
-// console.log(`[processDocument] Using Document AI OCR for file ID ${fileId}`);
-// extractedTexts = await extractTextFromDocument(fileBuffer, mimetype);
-// } else {
-// console.log(`[processDocument] Using standard text extraction for file ID ${fileId}`);
-// const text = await extractText(fileBuffer, mimetype);
-// extractedTexts.push({ text });
-// }
-
-// if (!extractedTexts.length || extractedTexts.every(item => !item.text || item.text.trim() === "")) {
-// throw new Error("No meaningful text extracted from document.");
-// }
-
-// await DocumentModel.updateFileStatus(fileId, "processing", 25.0);
-
-// // ✅ Step 4: Chunk document using selected chunking method
-// console.log(`[processDocument] Chunking file ID ${fileId} using method: ${chunkingMethod}`);
-// const chunks = await chunkDocument(extractedTexts, fileId, chunkingMethod);
-// console.log(`[processDocument] Generated ${chunks.length} chunks using ${chunkingMethod} method.`);
-// await DocumentModel.updateFileStatus(fileId, "processing", 50.0);
-
-// if (!chunks.length) {
-// console.warn(`[processDocument] No chunks generated. Marking as processed.`);
-// await DocumentModel.updateFileProcessedAt(fileId);
-// await DocumentModel.updateFileStatus(fileId, "processed", 100.0);
-// await ProcessingJobModel.updateJobStatus(jobId, "completed");
-// return;
-// }
-
-// // ✅ Step 5: Generate embeddings
-// console.log(`[processDocument] Generating embeddings for ${chunks.length} chunks...`);
-// const chunkContents = chunks.map(c => c.content);
-// const embeddings = await generateEmbeddings(chunkContents);
-
-// if (chunks.length !== embeddings.length) {
-// throw new Error("Mismatch between number of chunks and embeddings generated.");
-// }
-
-// // ✅ Step 6: Save chunks and embeddings
-// const chunksToSave = chunks.map((chunk, i) => ({
-// file_id: fileId,
-// chunk_index: i,
-// content: chunk.content,
-// token_count: chunk.token_count,
-// page_start: chunk.metadata.page_start,
-// page_end: chunk.metadata.page_end,
-// heading: chunk.metadata.heading,
-// }));
-
-// const savedChunks = await FileChunkModel.saveMultipleChunks(chunksToSave);
-// console.log(`[processDocument] Saved ${savedChunks.length} chunks to database.`);
-
-// const vectorsToSave = savedChunks.map((savedChunk, i) => ({
-// chunk_id: savedChunk.id,
-// embedding: embeddings[i],
-// file_id: fileId,
-// }));
-
-// await ChunkVectorModel.saveMultipleChunkVectors(vectorsToSave);
-// await DocumentModel.updateFileStatus(fileId, "processing", 75.0);
-
-// // ✅ Step 7: Generate summary
-// try {
-// const fullText = chunks.map(c => c.content).join("\n\n");
-// if (fullText.trim()) {
-// const summary = await getSummaryFromChunks(fullText);
-// await DocumentModel.updateFileSummary(fileId, summary);
-// console.log(`[processDocument] Summary generated for file ID ${fileId}`);
-// }
-// } catch (summaryError) {
-// console.warn(`[processDocument] Summary generation failed: ${summaryError.message}`);
-// }
-
-// // ✅ Step 8: Finalize status
-// await DocumentModel.updateFileProcessedAt(fileId);
-// await DocumentModel.updateFileStatus(fileId, "processed", 100.0);
-// await ProcessingJobModel.updateJobStatus(jobId, "completed");
-
-// console.log(`✅ Document ID ${fileId} fully processed using '${chunkingMethod}' method.`);
-// } catch (error) {
-// console.error(`❌ processDocument failed for file ID ${fileId}:`, error);
-// await DocumentModel.updateFileStatus(fileId, "error", 0.0);
-// await ProcessingJobModel.updateJobStatus(jobId, "failed", error.message);
-// }
-// }
-
-// Add this helper function at the top of your controller
-// const updateProcessingProgress = async (fileId, status, progress, currentOperation) => {
-//  await DocumentModel.updateFileStatus(fileId, status, progress);
-//  await DocumentModel.updateCurrentOperation(fileId, currentOperation);
-//  console.log(`[Progress] File ${fileId}: ${currentOperation} - ${progress}%`);
-// };
-
-// /**
-//  * @description Asynchronously processes a document with granular real-time progress tracking
-//  */
-// async function processDocument(fileId, fileBuffer, mimetype, userId, secretId = null) {
-//  const jobId = uuidv4();
- 
-//  try {
-//  // Initialize job
-//  await ProcessingJobModel.createJob({
-//  job_id: jobId,
-//  file_id: fileId,
-//  type: "synchronous",
-//  document_ai_operation_name: null,
-//  status: "queued",
-//  secret_id: secretId,
-//  });
-
-//  // Step 1: Starting (5%)
-//  await updateProcessingProgress(fileId, "processing", 5.0, "Initializing document processing");
-
-//  let chunkingMethod = "recursive";
-
-//  // Step 2: Fetch chunking method (10%)
-//  if (secretId) {
-//  await updateProcessingProgress(fileId, "processing", 10.0, "Fetching processing configuration");
-//  console.log(`[processDocument] Fetching chunking method for secret ID: ${secretId}`);
-//  const secretQuery = `
-//  SELECT chunking_method
-//  FROM secret_manager
-//  WHERE id = $1
-//  `;
-//  const result = await db.query(secretQuery, [secretId]);
-//  if (result.rows.length > 0 && result.rows[0].chunking_method) {
-//  chunkingMethod = result.rows[0].chunking_method;
-//  console.log(`[processDocument] Using chunking method from DB: ${chunkingMethod}`);
-//  }
-//  } else {
-//  await updateProcessingProgress(fileId, "processing", 10.0, "Using default configuration");
-//  }
-
-//  // Step 3: Check if already processed (15%)
-//  await updateProcessingProgress(fileId, "processing", 15.0, "Checking document status");
-//  const file = await DocumentModel.getFileById(fileId);
-//  if (file.status === "processed") {
-//  console.log(`[processDocument] File ${fileId} already processed. Skipping.`);
-//  await ProcessingJobModel.updateJobStatus(jobId, "completed");
-//  await updateProcessingProgress(fileId, "processed", 100.0, "Already processed");
-//  return;
-//  }
-
-//  // Step 4: Text Extraction (15% - 40%)
-//  await updateProcessingProgress(fileId, "processing", 20.0, "Extracting text from document");
- 
-//  let extractedTexts = [];
-//  const ocrMimeTypes = [
-//  "application/pdf", "image/png", "image/jpeg", "image/tiff",
-//  "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-//  "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-//  "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-//  "text/plain", "text/csv",
-//  ];
-
-//  const useOCR = ocrMimeTypes.includes(String(mimetype).toLowerCase());
- 
-//  if (useOCR) {
-//  console.log(`[processDocument] Using Document AI OCR for file ID ${fileId}`);
-//  await updateProcessingProgress(fileId, "processing", 25.0, "Processing with OCR (this may take a moment)");
-//  extractedTexts = await extractTextFromDocument(fileBuffer, mimetype);
-//  await updateProcessingProgress(fileId, "processing", 40.0, "Text extraction completed");
-//  } else {
-//  console.log(`[processDocument] Using standard text extraction for file ID ${fileId}`);
-//  await updateProcessingProgress(fileId, "processing", 30.0, "Extracting text content");
-//  const text = await extractText(fileBuffer, mimetype);
-//  extractedTexts.push({ text });
-//  await updateProcessingProgress(fileId, "processing", 40.0, "Text extraction completed");
-//  }
-
-//  if (!extractedTexts.length || extractedTexts.every(item => !item.text || item.text.trim() === "")) {
-//  throw new Error("No meaningful text extracted from document.");
-//  }
-
-//  // Step 5: Chunking (40% - 55%)
-//  await updateProcessingProgress(fileId, "processing", 45.0, `Chunking document using ${chunkingMethod} method`);
-//  console.log(`[processDocument] Chunking file ID ${fileId} using method: ${chunkingMethod}`);
-//  const chunks = await chunkDocument(extractedTexts, fileId, chunkingMethod);
-//  console.log(`[processDocument] Generated ${chunks.length} chunks using ${chunkingMethod} method.`);
-//  await updateProcessingProgress(fileId, "processing", 55.0, `Created ${chunks.length} chunks`);
-
-//  if (!chunks.length) {
-//  console.warn(`[processDocument] No chunks generated. Marking as processed.`);
-//  await DocumentModel.updateFileProcessedAt(fileId);
-//  await updateProcessingProgress(fileId, "processed", 100.0, "Processing completed (no content to chunk)");
-//  await ProcessingJobModel.updateJobStatus(jobId, "completed");
-//  return;
-//  }
-
-//  // Step 6: Generate Embeddings (55% - 75%)
-//  await updateProcessingProgress(fileId, "processing", 60.0, `Generating embeddings for ${chunks.length} chunks`);
-//  console.log(`[processDocument] Generating embeddings for ${chunks.length} chunks...`);
-//  const chunkContents = chunks.map(c => c.content);
-//  const embeddings = await generateEmbeddings(chunkContents);
-//  await updateProcessingProgress(fileId, "processing", 75.0, "Embeddings generated successfully");
-
-//  if (chunks.length !== embeddings.length) {
-//  throw new Error("Mismatch between number of chunks and embeddings generated.");
-//  }
-
-//  // Step 7: Save to Database (75% - 85%)
-//  await updateProcessingProgress(fileId, "processing", 78.0, "Saving chunks to database");
-//  const chunksToSave = chunks.map((chunk, i) => ({
-//  file_id: fileId,
-//  chunk_index: i,
-//  content: chunk.content,
-//  token_count: chunk.token_count,
-//  page_start: chunk.metadata.page_start,
-//  page_end: chunk.metadata.page_end,
-//  heading: chunk.metadata.heading,
-//  }));
-
-//  const savedChunks = await FileChunkModel.saveMultipleChunks(chunksToSave);
-//  console.log(`[processDocument] Saved ${savedChunks.length} chunks to database.`);
-//  await updateProcessingProgress(fileId, "processing", 82.0, "Chunks saved successfully");
-
-//  await updateProcessingProgress(fileId, "processing", 84.0, "Storing vector embeddings");
-//  const vectorsToSave = savedChunks.map((savedChunk, i) => ({
-//  chunk_id: savedChunk.id,
-//  embedding: embeddings[i],
-//  file_id: fileId,
-//  }));
-
-//  await ChunkVectorModel.saveMultipleChunkVectors(vectorsToSave);
-//  await updateProcessingProgress(fileId, "processing", 85.0, "Vector embeddings stored");
-
-//  // Step 8: Generate Summary (85% - 95%)
-//  await updateProcessingProgress(fileId, "processing", 88.0, "Generating document summary");
-//  try {
-//  const fullText = chunks.map(c => c.content).join("\n\n");
-//  if (fullText.trim()) {
-//  const summary = await getSummaryFromChunks(fullText);
-//  await DocumentModel.updateFileSummary(fileId, summary);
-//  await updateProcessingProgress(fileId, "processing", 95.0, "Summary generated successfully");
-//  console.log(`[processDocument] Summary generated for file ID ${fileId}`);
-//  }
-//  } catch (summaryError) {
-//  console.warn(`[processDocument] Summary generation failed: ${summaryError.message}`);
-//  await updateProcessingProgress(fileId, "processing", 95.0, "Summary generation skipped");
-//  }
-
-//  // Step 9: Finalization (95% - 100%)
-//  await updateProcessingProgress(fileId, "processing", 98.0, "Finalizing document processing");
-//  await DocumentModel.updateFileProcessedAt(fileId);
-//  await updateProcessingProgress(fileId, "processed", 100.0, "Document processing completed");
-//  await ProcessingJobModel.updateJobStatus(jobId, "completed");
-
-//  console.log(`✅ Document ID ${fileId} fully processed using '${chunkingMethod}' method.`);
-//  } catch (error) {
-//  console.error(`❌ processDocument failed for file ID ${fileId}:`, error);
-//  await updateProcessingProgress(fileId, "error", 0.0, `Error: ${error.message}`);
-//  await ProcessingJobModel.updateJobStatus(jobId, "failed", error.message);
-//  }
-// }
 
 const updateProcessingProgress = async (
  fileId,
@@ -1503,192 +1192,7 @@ exports.getSummary = async (req, res) => {
  return res.status(500).json({ error: "Failed to generate summary." });
  }
 };
-// controllers/chatController.js
-// exports.chatWithDocument = async (req, res) => {
-//   let userId = null;
 
-//   try {
-//     const {
-//       file_id,
-//       question,
-//       used_secret_prompt = false,
-//       prompt_label = null,
-//       session_id = null,
-//       secret_id,
-//       llm_name,
-//       additional_input = '',
-//     } = req.body;
-
-//     userId = req.user.id;
-
-//     // ---------- VALIDATION ----------
-//     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-//     if (!file_id) return res.status(400).json({ error: 'file_id is required.' });
-//     if (!uuidRegex.test(file_id)) return res.status(400).json({ error: 'Invalid file ID format.' });
-
-//     const finalSessionId = session_id || `session-${Date.now()}`;
-
-//     // ---------- SSE HEADERS ----------
-//     res.setHeader('Content-Type', 'text/event-stream');
-//     res.setHeader('Cache-Control', 'no-cache');
-//     res.setHeader('Connection', 'keep-alive');
-//     res.flushHeaders();
-
-//     console.log(
-//       `[chatWithDocumentStream] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}`
-//     );
-
-//     // ---------- FILE ACCESS ----------
-//     const file = await DocumentModel.getFileById(file_id);
-//     if (!file) return res.write(`data: ${JSON.stringify({ error: 'File not found.' })}\n\n`);
-//     if (String(file.user_id) !== String(userId))
-//       return res.write(`data: ${JSON.stringify({ error: 'Access denied.' })}\n\n`);
-//     if (file.status !== 'processed')
-//       return res.write(
-//         `data: ${JSON.stringify({
-//           error: 'Document is not yet processed.',
-//           status: file.status,
-//           progress: file.processing_progress,
-//         })}\n\n`
-//       );
-
-//     // ---------- PROMPT BUILDING ----------
-//     let usedChunkIds = [];
-//     let storedQuestion;
-//     let finalPromptLabel = prompt_label;
-//     let provider = 'gemini';
-//     let finalPrompt = '';
-
-//     if (used_secret_prompt) {
-//       if (!secret_id)
-//         return res.write(`data: ${JSON.stringify({ error: 'secret_id required.' })}\n\n`);
-
-//       const secretQuery = `
-//         SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
-//         FROM secret_manager s
-//         LEFT JOIN llm_models l ON s.llm_id = l.id
-//         WHERE s.id = $1`;
-//       const secretResult = await db.query(secretQuery, [secret_id]);
-//       if (!secretResult.rows.length)
-//         return res.write(`data: ${JSON.stringify({ error: 'Secret configuration not found.' })}\n\n`);
-
-//       const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } =
-//         secretResult.rows[0];
-//       finalPromptLabel = secretName;
-//       provider = resolveProviderName(llm_name || dbLlmName || 'gemini');
-
-//       const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
-//       const client = new SecretManagerServiceClient();
-//       const GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
-//       const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
-//       const [accessResponse] = await client.accessSecretVersion({ name: gcpSecretName });
-//       const secretValue = accessResponse.payload.data.toString('utf8');
-
-//       const chunks = await FileChunkModel.getChunksByFileId(file_id);
-//       usedChunkIds = chunks.map((c) => c.id);
-//       const docContent = chunks.map((c) => c.content).join('\n\n');
-
-//       finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${docContent}`;
-//       if (additional_input?.trim())
-//         finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additional_input.trim()}`;
-
-//       storedQuestion = secretName;
-//     } else {
-//       if (!question?.trim())
-//         return res.write(`data: ${JSON.stringify({ error: 'question is required.' })}\n\n`);
-
-//       provider = 'gemini';
-//       const questionEmbedding = await generateEmbedding(question);
-//       const relevantChunks = await ChunkVectorModel.findNearestChunks(questionEmbedding, 5, file_id);
-//       const relevantTexts = relevantChunks.map((c) => c.content);
-//       usedChunkIds = relevantChunks.map((c) => c.chunk_id);
-
-//       if (!relevantTexts.length) {
-//         const all = await FileChunkModel.getChunksByFileId(file_id);
-//         finalPrompt = `${question}\n\nContext:\n${all.map((c) => c.content).join('\n\n')}`;
-//       } else {
-//         finalPrompt = `${question}\n\nContext:\n${relevantTexts.join('\n\n')}`;
-//       }
-//       storedQuestion = question;
-//     }
-
-//     // ---------- STREAM FROM LLM ----------
-//     const stream = await askLLM(provider, finalPrompt, { stream: true });
-//     let fullResponse = '';
-
-//     for await (const chunk of stream) {
-//       const text = chunk?.text || chunk;
-//       fullResponse += text;
-//       res.write(`data: ${JSON.stringify({ text })}\n\n`);
-//     }
-
-//     console.log(`[chatWithDocumentStream] Full response length: ${fullResponse.length} characters`);
-
-//     // ---------- SAVE CHAT ----------
-//     const savedChat = await FileChat.saveChat(
-//       file_id,
-//       userId,
-//       storedQuestion,
-//       fullResponse,
-//       finalSessionId,
-//       usedChunkIds,
-//       used_secret_prompt,
-//       finalPromptLabel,
-//       used_secret_prompt ? secret_id : null
-//     );
-
-//     // ---------- TOKEN USAGE ----------
-//     try {
-//       const { userUsage, userPlan, requestedResources } = req;
-//       await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
-//     } catch (e) {
-//       console.warn('Token usage increment failed:', e.message);
-//     }
-
-//     // ---------- HISTORY ----------
-//     const historyRows = await FileChat.getChatHistory(file_id, finalSessionId);
-//     const history = historyRows.map((row) => ({
-//       id: row.id,
-//       file_id: row.file_id,
-//       session_id: row.session_id,
-//       question: row.question,
-//       answer: row.answer,
-//       used_secret_prompt: row.used_secret_prompt || false,
-//       prompt_label: row.prompt_label || null,
-//       secret_id: row.secret_id || null,
-//       used_chunk_ids: row.used_chunk_ids || [],
-//       confidence: row.confidence || 0.8,
-//       timestamp: row.created_at || row.timestamp,
-//       display_text_left_panel: row.used_secret_prompt
-//         ? `Analysis: ${row.prompt_label || 'Secret Prompt'}`
-//         : row.question,
-//     }));
-
-//     // ---------- FINALIZE ----------
-//     // Do NOT include 'answer: fullResponse' here, as the client should assemble it from chunks.
-//     // This reduces the size of the final message and potential client-side parsing issues.
-//     res.write(
-//       `data: ${JSON.stringify({
-//         done: true,
-//         success: true,
-//         session_id: finalSessionId,
-//         message_id: savedChat.id,
-//         history,
-//         used_chunk_ids: usedChunkIds,
-//         confidence: used_secret_prompt ? 0.9 : 0.85,
-//         timestamp: savedChat.created_at || new Date().toISOString(),
-//         llm_provider: provider,
-//         used_secret_prompt,
-//       })}\n\n`
-//     );
-//     res.write(`data: [DONE]\n\n`);
-//     res.end();
-//   } catch (error) {
-//     console.error('❌ Error in chatWithDocument (streaming):', error);
-//     res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
-//     res.end();
-//   }
-// };
 
 // exports.chatWithDocument = async (req, res) => {
 //   let userId = null;
@@ -1712,380 +1216,11 @@ exports.getSummary = async (req, res) => {
 //     if (!file_id) return res.status(400).json({ error: 'file_id is required.' });
 //     if (!uuidRegex.test(file_id)) return res.status(400).json({ error: 'Invalid file ID format.' });
 
-//     const finalSessionId = session_id || `session-${Date.now()}`;
-
-//     // ---------- SSE HEADERS ----------
-//     res.setHeader('Content-Type', 'text/event-stream');
-//     res.setHeader('Cache-Control', 'no-cache');
-//     res.setHeader('Connection', 'keep-alive');
-//     res.flushHeaders();
+//     const hasExistingSession = session_id && uuidRegex.test(session_id);
+//     const finalSessionId = hasExistingSession ? session_id : uuidv4();
 
 //     console.log(
-//       `[chatWithDocumentStream] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}`
-//     );
-
-//     // ---------- FILE ACCESS ----------
-//     const file = await DocumentModel.getFileById(file_id);
-//     if (!file) return res.write(`data: ${JSON.stringify({ error: 'File not found.' })}\n\n`);
-//     if (String(file.user_id) !== String(userId))
-//       return res.write(`data: ${JSON.stringify({ error: 'Access denied.' })}\n\n`);
-//     if (file.status !== 'processed')
-//       return res.write(
-//         `data: ${JSON.stringify({
-//           error: 'Document is not yet processed.',
-//           status: file.status,
-//           progress: file.processing_progress,
-//         })}\n\n`
-//       );
-
-//     // ---------- PROMPT BUILDING ----------
-//     let usedChunkIds = [];
-//     let storedQuestion;
-//     let finalPromptLabel = prompt_label;
-//     let provider = 'gemini';
-//     let finalPrompt = '';
-
-//     if (used_secret_prompt) {
-//       if (!secret_id)
-//         return res.write(`data: ${JSON.stringify({ error: 'secret_id required.' })}\n\n`);
-
-//       const secretQuery = `
-//         SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
-//         FROM secret_manager s
-//         LEFT JOIN llm_models l ON s.llm_id = l.id
-//         WHERE s.id = $1`;
-//       const secretResult = await db.query(secretQuery, [secret_id]);
-//       if (!secretResult.rows.length)
-//         return res.write(`data: ${JSON.stringify({ error: 'Secret configuration not found.' })}\n\n`);
-
-//       const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } =
-//         secretResult.rows[0];
-//       finalPromptLabel = secretName;
-//       provider = resolveProviderName(llm_name || dbLlmName || 'gemini');
-
-//       const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
-//       const client = new SecretManagerServiceClient();
-//       const GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
-//       const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
-//       const [accessResponse] = await client.accessSecretVersion({ name: gcpSecretName });
-//       const secretValue = accessResponse.payload.data.toString('utf8');
-
-//       const chunks = await FileChunkModel.getChunksByFileId(file_id);
-//       usedChunkIds = chunks.map((c) => c.id);
-//       const docContent = chunks.map((c) => c.content).join('\n\n');
-
-//       finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${docContent}`;
-//       if (additional_input?.trim())
-//         finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additional_input.trim()}`;
-
-//       storedQuestion = secretName;
-//     } else {
-//       if (!question?.trim())
-//         return res.write(`data: ${JSON.stringify({ error: 'question is required.' })}\n\n`);
-
-//       provider = 'gemini';
-//       const questionEmbedding = await generateEmbedding(question);
-//       const relevantChunks = await ChunkVectorModel.findNearestChunks(questionEmbedding, 5, file_id);
-//       const relevantTexts = relevantChunks.map((c) => c.content);
-//       usedChunkIds = relevantChunks.map((c) => c.chunk_id);
-
-//       if (!relevantTexts.length) {
-//         const all = await FileChunkModel.getChunksByFileId(file_id);
-//         finalPrompt = `${question}\n\nContext:\n${all.map((c) => c.content).join('\n\n')}`;
-//       } else {
-//         finalPrompt = `${question}\n\nContext:\n${relevantTexts.join('\n\n')}`;
-//       }
-//       storedQuestion = question;
-//     }
-
-//     // ---------- STREAM FROM LLM ----------
-//     const stream = await askLLM(provider, finalPrompt, { stream: true });
-//     let fullResponse = '';
-
-//     for await (const chunk of stream) {
-//       const text = chunk?.text || chunk;
-//       fullResponse += text;
-//       res.write(`data: ${JSON.stringify({ text })}\n\n`);
-//     }
-
-//     // ---------- SAVE CHAT ----------
-//     const savedChat = await FileChat.saveChat(
-//       file_id,
-//       userId,
-//       storedQuestion,
-//       fullResponse,
-//       finalSessionId,
-//       usedChunkIds,
-//       used_secret_prompt,
-//       finalPromptLabel,
-//       used_secret_prompt ? secret_id : null
-//     );
-
-//     // ---------- TOKEN USAGE ----------
-//     try {
-//       const { userUsage, userPlan, requestedResources } = req;
-//       await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
-//     } catch (e) {
-//       console.warn('Token usage increment failed:', e.message);
-//     }
-
-//     // ---------- HISTORY ----------
-//     const historyRows = await FileChat.getChatHistory(file_id, finalSessionId);
-//     const history = historyRows.map((row) => ({
-//       id: row.id,
-//       file_id: row.file_id,
-//       session_id: row.session_id,
-//       question: row.question,
-//       answer: row.answer,
-//       used_secret_prompt: row.used_secret_prompt || false,
-//       prompt_label: row.prompt_label || null,
-//       secret_id: row.secret_id || null,
-//       used_chunk_ids: row.used_chunk_ids || [],
-//       confidence: row.confidence || 0.8,
-//       timestamp: row.created_at || row.timestamp,
-//       display_text_left_panel: row.used_secret_prompt
-//         ? `Analysis: ${row.prompt_label || 'Secret Prompt'}`
-//         : row.question,
-//     }));
-
-//     // ---------- FINALIZE ----------
-//     res.write(
-//       `data: ${JSON.stringify({
-//         done: true,
-//         success: true,
-//         session_id: finalSessionId,
-//         message_id: savedChat.id,
-//         answer: fullResponse,
-//         history,
-//         used_chunk_ids: usedChunkIds,
-//         confidence: used_secret_prompt ? 0.9 : 0.85,
-//         timestamp: savedChat.created_at || new Date().toISOString(),
-//         llm_provider: provider,
-//         used_secret_prompt,
-//       })}\n\n`
-//     );
-//     res.write(`data: [DONE]\n\n`);
-//     res.end();
-//   } catch (error) {
-//     console.error('❌ Error in chatWithDocument (streaming):', error);
-//     res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
-//     res.end();
-//   }
-// };
-// exports.chatWithDocument = async (req, res) => {
-//   let userId = null;
-
-//   try {
-//     const {
-//       file_id,
-//       question,
-//       used_secret_prompt = false,
-//       prompt_label = null,
-//       session_id = null,
-//       secret_id,
-//       llm_name,
-//       additional_input = '',
-//     } = req.body;
-
-//     userId = req.user.id;
-
-//     // ---------- VALIDATION ----------
-//     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-//     if (!file_id) {
-//       return res.status(400).json({ error: 'file_id is required.' });
-//     }
-//     if (!uuidRegex.test(file_id)) {
-//       return res.status(400).json({ error: 'Invalid file ID format.' });
-//     }
-
-//     const finalSessionId = session_id || `session-${Date.now()}`;
-
-//     console.log(
-//       `[chatWithDocument] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}`
-//     );
-
-//     // ---------- FILE ACCESS ----------
-//     const file = await DocumentModel.getFileById(file_id);
-//     if (!file) {
-//       return res.status(404).json({ error: 'File not found.' });
-//     }
-//     if (String(file.user_id) !== String(userId)) {
-//       return res.status(403).json({ error: 'Access denied.' });
-//     }
-//     if (file.status !== 'processed') {
-//       return res.status(400).json({
-//         error: 'Document is not yet processed.',
-//         status: file.status,
-//         progress: file.processing_progress,
-//       });
-//     }
-
-//     // ---------- PROMPT BUILDING ----------
-//     let usedChunkIds = [];
-//     let storedQuestion;
-//     let finalPromptLabel = prompt_label;
-//     let provider = 'gemini';
-//     let finalPrompt = '';
-
-//     if (used_secret_prompt) {
-//       if (!secret_id) {
-//         return res.status(400).json({ error: 'secret_id required.' });
-//       }
-
-//       const secretQuery = `
-//         SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
-//         FROM secret_manager s
-//         LEFT JOIN llm_models l ON s.llm_id = l.id
-//         WHERE s.id = $1`;
-//       const secretResult = await db.query(secretQuery, [secret_id]);
-//       if (!secretResult.rows.length) {
-//         return res.status(404).json({ error: 'Secret configuration not found.' });
-//       }
-
-//       const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } =
-//         secretResult.rows[0];
-//       finalPromptLabel = secretName;
-//       provider = resolveProviderName(llm_name || dbLlmName || 'gemini');
-
-//       const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
-//       const client = new SecretManagerServiceClient();
-//       const GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
-//       const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
-//       const [accessResponse] = await client.accessSecretVersion({ name: gcpSecretName });
-//       const secretValue = accessResponse.payload.data.toString('utf8');
-
-//       const chunks = await FileChunkModel.getChunksByFileId(file_id);
-//       usedChunkIds = chunks.map((c) => c.id);
-//       const docContent = chunks.map((c) => c.content).join('\n\n');
-
-//       finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${docContent}`;
-//       if (additional_input?.trim())
-//         finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additional_input.trim()}`;
-
-//       storedQuestion = secretName;
-//     } else {
-//       if (!question?.trim()) {
-//         return res.status(400).json({ error: 'question is required.' });
-//       }
-
-//       provider = 'gemini';
-//       const questionEmbedding = await generateEmbedding(question);
-//       const relevantChunks = await ChunkVectorModel.findNearestChunks(questionEmbedding, 5, file_id);
-//       const relevantTexts = relevantChunks.map((c) => c.content);
-//       usedChunkIds = relevantChunks.map((c) => c.chunk_id);
-
-//       if (!relevantTexts.length) {
-//         const all = await FileChunkModel.getChunksByFileId(file_id);
-//         finalPrompt = `${question}\n\nContext:\n${all.map((c) => c.content).join('\n\n')}`;
-//       } else {
-//         finalPrompt = `${question}\n\nContext:\n${relevantTexts.join('\n\n')}`;
-//       }
-//     } // Closing brace for the else block
-
-//     // ---------- GET RESPONSE FROM LLM (WITHOUT STREAMING) ----------
-//     console.log(`[chatWithDocument] Calling LLM provider: ${provider}`);
-    
-//     // Call askLLM without stream option to get complete response
-//     const answer = await askLLM(provider, finalPrompt, { stream: false });
-
-//     if (!answer || !answer.trim()) {
-//       return res.status(500).json({ error: 'Empty response from AI.' });
-//     }
-
-//     console.log(`[chatWithDocument] Received answer, length: ${answer.length} characters`);
-
-//     // ---------- SAVE CHAT ----------
-//     const savedChat = await FileChat.saveChat(
-//       file_id,
-//       userId,
-//       storedQuestion,
-//       answer,
-//       finalSessionId,
-//       usedChunkIds,
-//       used_secret_prompt,
-//       finalPromptLabel,
-//       used_secret_prompt ? secret_id : null
-//     );
-
-//     console.log(`[chatWithDocument] Chat saved with ID: ${savedChat.id}`);
-
-//     // ---------- TOKEN USAGE ----------
-//     try {
-//       const { userUsage, userPlan, requestedResources } = req;
-//       await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
-//     } catch (e) {
-//       console.warn('Token usage increment failed:', e.message);
-//     }
-
-//     // ---------- FETCH HISTORY ----------
-//     const historyRows = await FileChat.getChatHistory(file_id, finalSessionId);
-//     const history = historyRows.map((row) => ({
-//       id: row.id,
-//       file_id: row.file_id,
-//       session_id: row.session_id,
-//       question: row.question,
-//       answer: row.answer,
-//       used_secret_prompt: row.used_secret_prompt || false,
-//       prompt_label: row.prompt_label || null,
-//       secret_id: row.secret_id || null,
-//       used_chunk_ids: row.used_chunk_ids || [],
-//       confidence: row.confidence || 0.8,
-//       timestamp: row.created_at || row.timestamp,
-//       display_text_left_panel: row.used_secret_prompt
-//         ? `Analysis: ${row.prompt_label || 'Secret Prompt'}`
-//         : row.question,
-//     }));
-
-//     // ---------- RETURN COMPLETE RESPONSE ----------
-//     return res.status(200).json({
-//       success: true,
-//       session_id: finalSessionId,
-//       message_id: savedChat.id,
-//       answer: answer,
-//       response: answer,
-//       history: history,
-//       used_chunk_ids: usedChunkIds,
-//       confidence: used_secret_prompt ? 0.9 : 0.85,
-//       timestamp: savedChat.created_at || new Date().toISOString(),
-//       llm_provider: provider,
-//       used_secret_prompt: used_secret_prompt,
-//     });
-
-//   } catch (error) {
-//     console.error('❌ Error in chatWithDocument:', error);
-//     console.error('Stack trace:', error.stack);
-//     return res.status(500).json({
-//       error: 'Failed to get AI answer.',
-//       details: error.message,
-//     });
-//   }
-// }; // Closing brace for exports.chatWithDocument
-// exports.chatWithDocument = async (req, res) => {
-//   let userId = null;
-
-//   try {
-//     const {
-//       file_id,
-//       question,
-//       used_secret_prompt = false,
-//       prompt_label = null,
-//       session_id = null,
-//       secret_id,
-//       llm_name,
-//       additional_input = '',
-//     } = req.body;
-
-//     userId = req.user.id;
-
-//     // ---------- VALIDATION ----------
-//     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-//     if (!file_id) return res.status(400).json({ error: 'file_id is required.' });
-//     if (!uuidRegex.test(file_id)) return res.status(400).json({ error: 'Invalid file ID format.' });
-
-//     const finalSessionId = session_id || `session-${Date.now()}`;
-
-//     console.log(
-//       `[chatWithDocument] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}`
+//       `[chatWithDocument] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}, session_id=${finalSessionId}`
 //     );
 
 //     // ---------- FILE ACCESS ----------
@@ -2101,6 +1236,29 @@ exports.getSummary = async (req, res) => {
 //       });
 //     }
 
+//     let previousChats = [];
+//     if (hasExistingSession) {
+//       previousChats = await FileChat.getChatHistory(file_id, finalSessionId);
+//     }
+//     const conversationContext = formatConversationHistory(previousChats);
+//     const historyForStorage = simplifyHistory(previousChats);
+//     if (historyForStorage.length > 0) {
+//       const lastTurn = historyForStorage[historyForStorage.length - 1];
+//       console.log(
+//         `[chatWithDocument] Using ${historyForStorage.length} prior turn(s) for context. Most recent: Q="${(lastTurn.question || '').slice(0, 120)}", A="${(lastTurn.answer || '').slice(0, 120)}"`
+//       );
+//     } else {
+//       console.log('[chatWithDocument] No prior context for this session.');
+//     }
+
+//     // ✅ RAG CONFIGURATION
+//     const SIMILARITY_THRESHOLD = 0.75; // Cosine similarity cutoff
+//     const MIN_CHUNKS = 5; // Minimum chunks to retrieve
+//     const MAX_CHUNKS = 10; // Maximum chunks to retrieve
+//     const MAX_CONTEXT_TOKENS = 4000; // ~15% of model limit
+//     const CHARS_PER_TOKEN = 4; // Average chars per token
+//     const MAX_CONTEXT_CHARS = MAX_CONTEXT_TOKENS * CHARS_PER_TOKEN; // ~16,000 chars
+
 //     // ---------- PROMPT BUILDING ----------
 //     let usedChunkIds = [];
 //     let storedQuestion = null;
@@ -2108,6 +1266,9 @@ exports.getSummary = async (req, res) => {
 //     let provider = 'gemini';
 //     let finalPrompt = '';
 
+//     // ================================
+//     // CASE 1: SECRET PROMPT
+//     // ================================
 //     if (used_secret_prompt) {
 //       if (!secret_id)
 //         return res.status(400).json({ error: 'secret_id required for secret prompt.' });
@@ -2133,43 +1294,220 @@ exports.getSummary = async (req, res) => {
 //       const [accessResponse] = await client.accessSecretVersion({ name: gcpSecretName });
 //       const secretValue = accessResponse.payload.data.toString('utf8');
 
-//       const chunks = await FileChunkModel.getChunksByFileId(file_id);
-//       usedChunkIds = chunks.map((c) => c.id);
-//       const docContent = chunks.map((c) => c.content).join('\n\n');
+//       // ✅ Get all chunks and apply smart selection
+//       const allChunks = await FileChunkModel.getChunksByFileId(file_id);
+      
+//       if (!allChunks || allChunks.length === 0) {
+//         return res.status(400).json({ error: 'No content found in document.' });
+//       }
 
-//       finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${docContent}`;
-//       if (additional_input?.trim())
-//         finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additional_input.trim()}`;
-
-//       storedQuestion = secretName; // ✅ non-null
-//     } else {
-//       if (!question?.trim())
-//         return res.status(400).json({ error: 'question is required.' });
-
-//       storedQuestion = question.trim(); // ✅ FIX: ensures "question" is never null
-
-//       provider = 'gemini';
-//       const questionEmbedding = await generateEmbedding(storedQuestion);
-//       const relevantChunks = await ChunkVectorModel.findNearestChunks(
-//         questionEmbedding,
-//         5,
+//       // ✅ For secret prompts, use embedding-based selection
+//       const secretEmbedding = await generateEmbedding(secretValue);
+//       const rankedChunks = await ChunkVectorModel.findNearestChunks(
+//         secretEmbedding,
+//         MAX_CHUNKS, // Retrieve top 10 candidates
 //         file_id
 //       );
 
-//       const relevantTexts = relevantChunks.map((c) => c.content);
-//       usedChunkIds = relevantChunks.map((c) => c.chunk_id);
+//       // ✅ Filter by similarity threshold
+//       const highQualityChunks = rankedChunks
+//         .filter(chunk => {
+//           const similarity = chunk.similarity || chunk.distance || 0;
+//           const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+//           return score >= SIMILARITY_THRESHOLD;
+//         })
+//         .sort((a, b) => {
+//           const scoreA = a.similarity > 1 ? (1 / (1 + a.similarity)) : a.similarity;
+//           const scoreB = b.similarity > 1 ? (1 / (1 + b.similarity)) : b.similarity;
+//           return scoreB - scoreA; // Best first
+//         });
 
-//       if (!relevantTexts.length) {
-//         const all = await FileChunkModel.getChunksByFileId(file_id);
-//         finalPrompt = `${storedQuestion}\n\nContext:\n${all.map((c) => c.content).join('\n\n')}`;
+//       console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${rankedChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
+
+//       // ✅ Select 5-10 best chunks within token budget
+//       let selectedChunks = [];
+//       let currentContextLength = 0;
+
+//       const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
+//         ? highQualityChunks 
+//         : rankedChunks; // Fallback if not enough high-quality chunks
+
+//       for (const chunk of chunksToConsider) {
+//         if (selectedChunks.length >= MAX_CHUNKS) break;
+        
+//         const chunkLength = chunk.content.length;
+//         if (currentContextLength + chunkLength <= MAX_CONTEXT_CHARS) {
+//           selectedChunks.push(chunk);
+//           currentContextLength += chunkLength;
+//         } else if (selectedChunks.length < MIN_CHUNKS) {
+//           // If we haven't reached minimum, truncate this chunk to fit
+//           const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
+//           if (remainingSpace > 500) {
+//             selectedChunks.push({
+//               ...chunk,
+//               content: chunk.content.substring(0, remainingSpace - 100) + "..."
+//             });
+//             currentContextLength += remainingSpace;
+//           }
+//           break;
+//         }
+//       }
+
+//       // ✅ Ensure minimum chunks
+//       const finalChunks = selectedChunks.length >= MIN_CHUNKS 
+//         ? selectedChunks 
+//         : chunksToConsider.slice(0, MIN_CHUNKS);
+
+//       console.log(`✅ Selected ${finalChunks.length} chunks for secret prompt | Context: ${currentContextLength} chars (~${Math.ceil(currentContextLength / CHARS_PER_TOKEN)} tokens)`);
+
+//       usedChunkIds = finalChunks.map((c) => c.chunk_id || c.id);
+
+//       // ✅ Build context with separators and metadata
+//       const docContent = finalChunks
+//         .map((c, idx) => {
+//           const similarity = c.similarity || c.distance || 0;
+//           const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+//           return `--- Chunk ${idx + 1} | Relevance: ${(score * 100).toFixed(1)}% ---\n${c.content}`;
+//         })
+//         .join('\n\n');
+
+//       finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${docContent}`;
+      
+//       if (additional_input?.trim()) {
+//         const trimmedInput = additional_input.trim().substring(0, 500);
+//         finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${trimmedInput}`;
+//       }
+
+//       storedQuestion = secretName;
+//     } 
+//     // ================================
+//     // CASE 2: CUSTOM QUESTION
+//     // ================================
+//     else {
+//       if (!question?.trim())
+//         return res.status(400).json({ error: 'question is required.' });
+
+//       storedQuestion = question.trim();
+
+//       // Fetch LLM model from custom_query table for custom queries (always fetch from DB)
+//       let dbLlmName = null;
+//       const customQueryLlm = `
+//         SELECT cq.llm_name, cq.llm_model_id
+//         FROM custom_query cq
+//         ORDER BY cq.id DESC
+//         LIMIT 1;
+//       `;
+//       const customQueryResult = await db.query(customQueryLlm);
+//       if (customQueryResult.rows.length > 0) {
+//         dbLlmName = customQueryResult.rows[0].llm_name;
+//         console.log(`🤖 Using LLM from custom_query table: ${dbLlmName}`);
 //       } else {
-//         finalPrompt = `${storedQuestion}\n\nContext:\n${relevantTexts.join('\n\n')}`;
+//         console.warn(`⚠️ No LLM found in custom_query table — falling back to gemini`);
+//         dbLlmName = 'gemini';
+//       }
+
+//       // Resolve provider name using the LLM from custom_query table
+//       provider = resolveProviderName(dbLlmName || "gemini");
+//       console.log(`🤖 Resolved LLM provider for custom query: ${provider}`);
+      
+//       // Check if provider is available
+//       const availableProviders = getAvailableProviders();
+//       if (!availableProviders[provider] || !availableProviders[provider].available) {
+//         console.warn(`⚠️ Provider '${provider}' unavailable — falling back to gemini`);
+//         provider = 'gemini';
+//       }
+
+//       // ✅ Vector search with similarity scoring
+//       const questionEmbedding = await generateEmbedding(storedQuestion);
+//       const rankedChunks = await ChunkVectorModel.findNearestChunks(
+//         questionEmbedding,
+//         MAX_CHUNKS, // Retrieve top 10 candidates
+//         file_id
+//       );
+
+//       if (!rankedChunks || rankedChunks.length === 0) {
+//         // Fallback: use all chunks if no vector matches
+//         console.log('⚠️ No vector matches found, using all chunks as fallback');
+//         const allChunks = await FileChunkModel.getChunksByFileId(file_id);
+//         const limitedChunks = allChunks.slice(0, MIN_CHUNKS);
+//         usedChunkIds = limitedChunks.map((c) => c.id);
+        
+//         const docContent = limitedChunks
+//           .map((c, idx) => `--- Chunk ${idx + 1} ---\n${c.content}`)
+//           .join('\n\n');
+        
+//         finalPrompt = `${storedQuestion}\n\n=== DOCUMENT CONTEXT ===\n${docContent}`;
+//       } else {
+//         // ✅ Filter by similarity threshold
+//         const highQualityChunks = rankedChunks
+//           .filter(chunk => {
+//             const similarity = chunk.similarity || chunk.distance || 0;
+//             const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+//             return score >= SIMILARITY_THRESHOLD;
+//           })
+//           .sort((a, b) => {
+//             const scoreA = a.similarity > 1 ? (1 / (1 + a.similarity)) : a.similarity;
+//             const scoreB = b.similarity > 1 ? (1 / (1 + b.similarity)) : b.similarity;
+//             return scoreB - scoreA;
+//           });
+
+//         console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${rankedChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
+
+//         // ✅ Select 5-10 best chunks within token budget
+//         let selectedChunks = [];
+//         let currentContextLength = 0;
+
+//         const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
+//           ? highQualityChunks 
+//           : rankedChunks;
+
+//         for (const chunk of chunksToConsider) {
+//           if (selectedChunks.length >= MAX_CHUNKS) break;
+          
+//           const chunkLength = chunk.content.length;
+//           if (currentContextLength + chunkLength <= MAX_CONTEXT_CHARS) {
+//             selectedChunks.push(chunk);
+//             currentContextLength += chunkLength;
+//           } else if (selectedChunks.length < MIN_CHUNKS) {
+//             const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
+//             if (remainingSpace > 500) {
+//               selectedChunks.push({
+//                 ...chunk,
+//                 content: chunk.content.substring(0, remainingSpace - 100) + "..."
+//               });
+//               currentContextLength += remainingSpace;
+//             }
+//             break;
+//           }
+//         }
+
+//         // ✅ Ensure minimum chunks
+//         const finalChunks = selectedChunks.length >= MIN_CHUNKS 
+//           ? selectedChunks 
+//           : chunksToConsider.slice(0, MIN_CHUNKS);
+
+//         console.log(`✅ Selected ${finalChunks.length} chunks | Context: ${currentContextLength} chars (~${Math.ceil(currentContextLength / CHARS_PER_TOKEN)} tokens)`);
+
+//         usedChunkIds = finalChunks.map((c) => c.chunk_id || c.id);
+
+//         // ✅ Build context with separators and metadata
+//         const relevantTexts = finalChunks
+//           .map((c, idx) => {
+//             const similarity = c.similarity || c.distance || 0;
+//             const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+//             return `--- Chunk ${idx + 1} | Relevance: ${(score * 100).toFixed(1)}% ---\n${c.content}`;
+//           })
+//           .join('\n\n');
+
+//         finalPrompt = `${storedQuestion}\n\n=== RELEVANT CONTEXT ===\n${relevantTexts}`;
 //       }
 //     }
 
+//     finalPrompt = appendConversationToPrompt(finalPrompt, conversationContext);
+
 //     // ---------- CALL LLM ----------
-//     console.log(`[chatWithDocument] Calling LLM provider: ${provider}`);
-//     const answer = await askLLM(provider, finalPrompt, { stream: false });
+//     console.log(`[chatWithDocument] Calling LLM provider: ${provider} | Chunks used: ${usedChunkIds.length}`);
+//     const answer = await askLLM(provider, finalPrompt);
 
 //     if (!answer?.trim()) {
 //       return res.status(500).json({ error: 'Empty response from AI.' });
@@ -2181,16 +1519,17 @@ exports.getSummary = async (req, res) => {
 //     const savedChat = await FileChat.saveChat(
 //       file_id,
 //       userId,
-//       storedQuestion, // ✅ always defined now
+//       storedQuestion,
 //       answer,
 //       finalSessionId,
 //       usedChunkIds,
 //       used_secret_prompt,
 //       finalPromptLabel,
-//       used_secret_prompt ? secret_id : null
+//       used_secret_prompt ? secret_id : null,
+//       historyForStorage
 //     );
 
-//     console.log(`[chatWithDocument] Chat saved with ID: ${savedChat.id}`);
+//     console.log(`[chatWithDocument] Chat saved with ID: ${savedChat.id} | Chunks used: ${usedChunkIds.length}`);
 
 //     // ---------- TOKEN USAGE ----------
 //     try {
@@ -2201,7 +1540,7 @@ exports.getSummary = async (req, res) => {
 //     }
 
 //     // ---------- FETCH HISTORY ----------
-//     const historyRows = await FileChat.getChatHistory(file_id, finalSessionId);
+//     const historyRows = await FileChat.getChatHistory(file_id, savedChat.session_id);
 //     const history = historyRows.map((row) => ({
 //       id: row.id,
 //       file_id: row.file_id,
@@ -2214,6 +1553,7 @@ exports.getSummary = async (req, res) => {
 //       used_chunk_ids: row.used_chunk_ids || [],
 //       confidence: row.confidence || 0.8,
 //       timestamp: row.created_at || row.timestamp,
+//       chat_history: row.chat_history || [],
 //       display_text_left_panel: row.used_secret_prompt
 //         ? `Analysis: ${row.prompt_label || 'Secret Prompt'}`
 //         : row.question,
@@ -2222,12 +1562,13 @@ exports.getSummary = async (req, res) => {
 //     // ---------- RETURN COMPLETE RESPONSE ----------
 //     return res.status(200).json({
 //       success: true,
-//       session_id: finalSessionId,
+//       session_id: savedChat.session_id,
 //       message_id: savedChat.id,
 //       answer,
 //       response: answer,
 //       history,
 //       used_chunk_ids: usedChunkIds,
+//       chunks_used: usedChunkIds.length, // ✅ Show actual count
 //       confidence: used_secret_prompt ? 0.9 : 0.85,
 //       timestamp: savedChat.created_at || new Date().toISOString(),
 //       llm_provider: provider,
@@ -2243,6 +1584,524 @@ exports.getSummary = async (req, res) => {
 //   }
 // };
 
+
+// exports.chatWithDocument = async (req, res) => {
+//   let userId = null;
+
+//   try {
+//     const {
+//       file_id,
+//       question,
+//       used_secret_prompt = false,
+//       prompt_label = null,
+//       session_id = null,
+//       secret_id,
+//       llm_name,
+//       additional_input = '',
+//     } = req.body;
+
+//     userId = req.user.id;
+
+//     // ---------- VALIDATION ----------
+//     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+//     const hasFileId = Boolean(file_id);
+    
+//     // Only validate file_id format if it's provided
+//     if (hasFileId && !uuidRegex.test(file_id)) {
+//       return res.status(400).json({ error: 'Invalid file ID format.' });
+//     }
+
+//     // Generate or validate session_id
+//     const hasExistingSession = session_id && uuidRegex.test(session_id);
+//     const finalSessionId = hasExistingSession ? session_id : uuidv4();
+
+//     console.log(
+//       `[chatWithDocument] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}, session_id=${finalSessionId}, has_file=${hasFileId}`
+//     );
+
+//     // Load existing session history (works for both file-based and file-less sessions)
+//     const sessionHistory = hasExistingSession
+//       ? await FileChat.getChatHistoryBySession(userId, finalSessionId)
+//       : [];
+
+//     console.log(`[chatWithDocument] Loaded ${sessionHistory.length} previous messages from session`);
+
+//     // ================================
+//     // CASE 1: NO DOCUMENT YET (PRE-UPLOAD CHAT)
+//     // ================================
+//     if (!hasFileId) {
+//       if (!question?.trim()) {
+//         return res.status(400).json({ error: 'question is required when no document is provided.' });
+//       }
+
+//       console.log(`[chatWithDocument] Pre-upload mode - chatting without document`);
+
+//       // Determine LLM provider
+//       let provider = resolveProviderName(llm_name || 'gemini');
+//       console.log(`[chatWithDocument] Resolved provider: ${provider}`);
+      
+//       const availableProviders = getAvailableProviders();
+//       if (!availableProviders[provider] || !availableProviders[provider].available) {
+//         console.warn(`⚠️ Provider '${provider}' unavailable — falling back to gemini for pre-upload chat`);
+//         provider = 'gemini';
+//       }
+
+//       // Build prompt with conversation history
+//       const userPrompt = question.trim();
+//       const conversationContext = formatConversationHistory(sessionHistory);
+//       const finalPrompt = appendConversationToPrompt(userPrompt, conversationContext);
+
+//       console.log(`[chatWithDocument] Pre-upload conversation | Provider: ${provider} | Session: ${finalSessionId}`);
+//       console.log(`[chatWithDocument] Prompt length: ${finalPrompt.length} chars | History turns: ${sessionHistory.length}`);
+      
+//       // Get AI response
+//       const answer = await askLLM(provider, finalPrompt, ''); // Empty context since it's already in prompt
+
+//       if (!answer?.trim()) {
+//         return res.status(500).json({ error: 'Empty response from AI.' });
+//       }
+
+//       console.log(`✅ [chatWithDocument] Received answer: ${answer.length} chars`);
+
+//       // Save chat without file_id
+//       const savedChat = await FileChat.saveChat(
+//         null,              // No file_id for pre-upload chat
+//         userId,
+//         userPrompt,
+//         answer,
+//         finalSessionId,
+//         [],                // No chunks used
+//         false,             // Not a secret prompt
+//         null,              // No prompt label
+//         null,              // No secret_id
+//         simplifyHistory(sessionHistory)  // Store conversation context
+//       );
+
+//       // Fetch updated history
+//       const updatedHistoryRows = await FileChat.getChatHistoryBySession(userId, finalSessionId);
+//       const history = updatedHistoryRows.map((row) => ({
+//         id: row.id,
+//         file_id: row.file_id,
+//         session_id: row.session_id,
+//         question: row.question,
+//         answer: row.answer,
+//         used_secret_prompt: row.used_secret_prompt || false,
+//         prompt_label: row.prompt_label || null,
+//         secret_id: row.secret_id || null,
+//         used_chunk_ids: row.used_chunk_ids || [],
+//         confidence: row.confidence || 0.8,
+//         timestamp: row.created_at || row.timestamp,
+//         display_text_left_panel: row.used_secret_prompt
+//           ? `Analysis: ${row.prompt_label || 'Secret Prompt'}`
+//           : row.question,
+//       }));
+
+//       // Increment usage
+//       try {
+//         const { userUsage, userPlan, requestedResources } = req;
+//         await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
+//       } catch (e) {
+//         console.warn('Token usage increment failed for pre-upload chat:', e.message);
+//       }
+
+//       return res.status(200).json({
+//         success: true,
+//         session_id: finalSessionId,
+//         message_id: savedChat.id,
+//         answer,
+//         response: answer,
+//         history,
+//         used_chunk_ids: [],
+//         chunks_used: 0,
+//         confidence: 0.8,
+//         timestamp: savedChat.created_at || new Date().toISOString(),
+//         llm_provider: provider,
+//         used_secret_prompt: false,
+//         mode: 'pre_document',  // Indicates this is a pre-upload conversation
+//       });
+//     }
+
+//     // ================================
+//     // CASE 2: DOCUMENT PROVIDED (POST-UPLOAD CHAT)
+//     // ================================
+    
+//     console.log(`[chatWithDocument] Post-upload mode - chatting with document ${file_id}`);
+
+//     // ---------- FILE ACCESS ----------
+//     const file = await DocumentModel.getFileById(file_id);
+//     if (!file) return res.status(404).json({ error: 'File not found.' });
+//     if (String(file.user_id) !== String(userId)) {
+//       return res.status(403).json({ error: 'Access denied.' });
+//     }
+//     if (file.status !== 'processed') {
+//       return res.status(400).json({
+//         error: 'Document is not yet processed.',
+//         status: file.status,
+//         progress: file.processing_progress,
+//       });
+//     }
+
+//     // Link pre-upload chats to this file if they exist
+//     if (sessionHistory.length > 0) {
+//       const hasUnassignedChats = sessionHistory.some((chat) => !chat.file_id);
+//       if (hasUnassignedChats) {
+//         const linkedCount = await FileChat.assignFileIdToSession(userId, finalSessionId, file_id);
+//         console.log(`✅ Linked ${linkedCount} pre-upload chat(s) to file ${file_id}`);
+//       }
+//     }
+
+//     // Load previous chats for this file + session
+//     let previousChats = [];
+//     if (hasExistingSession) {
+//       previousChats = await FileChat.getChatHistory(file_id, finalSessionId);
+//     }
+
+//     // Build conversation context from ALL chats (pre-upload + post-upload)
+//     const conversationContext = formatConversationHistory(previousChats);
+//     const historyForStorage = simplifyHistory(previousChats);
+    
+//     if (historyForStorage.length > 0) {
+//       const lastTurn = historyForStorage[historyForStorage.length - 1];
+//       console.log(
+//         `[chatWithDocument] Using ${historyForStorage.length} prior turn(s) for context. Most recent: Q="${(lastTurn.question || '').slice(0, 120)}", A="${(lastTurn.answer || '').slice(0, 120)}"`
+//       );
+//     } else {
+//       console.log('[chatWithDocument] No prior context for this session.');
+//     }
+
+//     // ✅ RAG CONFIGURATION
+//     const SIMILARITY_THRESHOLD = 0.75;
+//     const MIN_CHUNKS = 5;
+//     const MAX_CHUNKS = 10;
+//     const MAX_CONTEXT_TOKENS = 4000;
+//     const CHARS_PER_TOKEN = 4;
+//     const MAX_CONTEXT_CHARS = MAX_CONTEXT_TOKENS * CHARS_PER_TOKEN;
+
+//     // ---------- PROMPT BUILDING ----------
+//     let usedChunkIds = [];
+//     let storedQuestion = null;
+//     let finalPromptLabel = prompt_label;
+//     let provider = 'gemini';
+//     let finalPrompt = '';
+
+//     // ================================
+//     // SECRET PROMPT HANDLING
+//     // ================================
+//     if (used_secret_prompt) {
+//       if (!secret_id) {
+//         return res.status(400).json({ error: 'secret_id required for secret prompt.' });
+//       }
+
+//       const secretQuery = `
+//         SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
+//         FROM secret_manager s
+//         LEFT JOIN llm_models l ON s.llm_id = l.id
+//         WHERE s.id = $1`;
+//       const secretResult = await db.query(secretQuery, [secret_id]);
+//       if (!secretResult.rows.length) {
+//         return res.status(404).json({ error: 'Secret configuration not found.' });
+//       }
+
+//       const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } =
+//         secretResult.rows[0];
+//       finalPromptLabel = secretName;
+//       provider = resolveProviderName(llm_name || dbLlmName || 'gemini');
+
+//       const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
+//       const client = new SecretManagerServiceClient();
+//       const GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
+//       const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
+//       const [accessResponse] = await client.accessSecretVersion({ name: gcpSecretName });
+//       const secretValue = accessResponse.payload.data.toString('utf8');
+
+//       // Get all chunks and apply smart selection
+//       const allChunks = await FileChunkModel.getChunksByFileId(file_id);
+      
+//       if (!allChunks || allChunks.length === 0) {
+//         return res.status(400).json({ error: 'No content found in document.' });
+//       }
+
+//       // Use embedding-based selection for secret prompts
+//       const secretEmbedding = await generateEmbedding(secretValue);
+//       const rankedChunks = await ChunkVectorModel.findNearestChunks(
+//         secretEmbedding,
+//         MAX_CHUNKS,
+//         file_id
+//       );
+
+//       // Filter by similarity threshold
+//       const highQualityChunks = rankedChunks
+//         .filter(chunk => {
+//           const similarity = chunk.similarity || chunk.distance || 0;
+//           const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+//           return score >= SIMILARITY_THRESHOLD;
+//         })
+//         .sort((a, b) => {
+//           const scoreA = a.similarity > 1 ? (1 / (1 + a.similarity)) : a.similarity;
+//           const scoreB = b.similarity > 1 ? (1 / (1 + b.similarity)) : b.similarity;
+//           return scoreB - scoreA;
+//         });
+
+//       console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${rankedChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
+
+//       // Select 5-10 best chunks within token budget
+//       let selectedChunks = [];
+//       let currentContextLength = 0;
+
+//       const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
+//         ? highQualityChunks 
+//         : rankedChunks;
+
+//       for (const chunk of chunksToConsider) {
+//         if (selectedChunks.length >= MAX_CHUNKS) break;
+        
+//         const chunkLength = chunk.content.length;
+//         if (currentContextLength + chunkLength <= MAX_CONTEXT_CHARS) {
+//           selectedChunks.push(chunk);
+//           currentContextLength += chunkLength;
+//         } else if (selectedChunks.length < MIN_CHUNKS) {
+//           const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
+//           if (remainingSpace > 500) {
+//             selectedChunks.push({
+//               ...chunk,
+//               content: chunk.content.substring(0, remainingSpace - 100) + "..."
+//             });
+//             currentContextLength += remainingSpace;
+//           }
+//           break;
+//         }
+//       }
+
+//       const finalChunks = selectedChunks.length >= MIN_CHUNKS 
+//         ? selectedChunks 
+//         : chunksToConsider.slice(0, MIN_CHUNKS);
+
+//       console.log(`✅ Selected ${finalChunks.length} chunks for secret prompt | Context: ${currentContextLength} chars (~${Math.ceil(currentContextLength / CHARS_PER_TOKEN)} tokens)`);
+
+//       usedChunkIds = finalChunks.map((c) => c.chunk_id || c.id);
+
+//       // Build context with separators and metadata
+//       const docContent = finalChunks
+//         .map((c, idx) => {
+//           const similarity = c.similarity || c.distance || 0;
+//           const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+//           return `--- Chunk ${idx + 1} | Relevance: ${(score * 100).toFixed(1)}% ---\n${c.content}`;
+//         })
+//         .join('\n\n');
+
+//       finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${docContent}`;
+      
+//       if (additional_input?.trim()) {
+//         const trimmedInput = additional_input.trim().substring(0, 500);
+//         finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${trimmedInput}`;
+//       }
+
+//       storedQuestion = secretName;
+//     } 
+//     // ================================
+//     // CUSTOM QUESTION HANDLING
+//     // ================================
+//     else {
+//       if (!question?.trim()) {
+//         return res.status(400).json({ error: 'question is required.' });
+//       }
+
+//       storedQuestion = question.trim();
+
+//       // Fetch LLM model from custom_query table
+//       let dbLlmName = null;
+//       const customQueryLlm = `
+//         SELECT cq.llm_name, cq.llm_model_id
+//         FROM custom_query cq
+//         ORDER BY cq.id DESC
+//         LIMIT 1;
+//       `;
+//       const customQueryResult = await db.query(customQueryLlm);
+//       if (customQueryResult.rows.length > 0) {
+//         dbLlmName = customQueryResult.rows[0].llm_name;
+//         console.log(`🤖 Using LLM from custom_query table: ${dbLlmName}`);
+//       } else {
+//         console.warn(`⚠️ No LLM found in custom_query table — falling back to gemini`);
+//         dbLlmName = 'gemini';
+//       }
+
+//       provider = resolveProviderName(dbLlmName || "gemini");
+//       console.log(`🤖 Resolved LLM provider for custom query: ${provider}`);
+      
+//       // Check if provider is available
+//       const availableProviders = getAvailableProviders();
+//       if (!availableProviders[provider] || !availableProviders[provider].available) {
+//         console.warn(`⚠️ Provider '${provider}' unavailable — falling back to gemini`);
+//         provider = 'gemini';
+//       }
+
+//       // Vector search with similarity scoring
+//       const questionEmbedding = await generateEmbedding(storedQuestion);
+//       const rankedChunks = await ChunkVectorModel.findNearestChunks(
+//         questionEmbedding,
+//         MAX_CHUNKS,
+//         file_id
+//       );
+
+//       if (!rankedChunks || rankedChunks.length === 0) {
+//         // Fallback: use all chunks if no vector matches
+//         console.log('⚠️ No vector matches found, using all chunks as fallback');
+//         const allChunks = await FileChunkModel.getChunksByFileId(file_id);
+//         const limitedChunks = allChunks.slice(0, MIN_CHUNKS);
+//         usedChunkIds = limitedChunks.map((c) => c.id);
+        
+//         const docContent = limitedChunks
+//           .map((c, idx) => `--- Chunk ${idx + 1} ---\n${c.content}`)
+//           .join('\n\n');
+        
+//         finalPrompt = `${storedQuestion}\n\n=== DOCUMENT CONTEXT ===\n${docContent}`;
+//       } else {
+//         // Filter by similarity threshold
+//         const highQualityChunks = rankedChunks
+//           .filter(chunk => {
+//             const similarity = chunk.similarity || chunk.distance || 0;
+//             const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+//             return score >= SIMILARITY_THRESHOLD;
+//           })
+//           .sort((a, b) => {
+//             const scoreA = a.similarity > 1 ? (1 / (1 + a.similarity)) : a.similarity;
+//             const scoreB = b.similarity > 1 ? (1 / (1 + b.similarity)) : b.similarity;
+//             return scoreB - scoreA;
+//           });
+
+//         console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${rankedChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
+
+//         // Select 5-10 best chunks within token budget
+//         let selectedChunks = [];
+//         let currentContextLength = 0;
+
+//         const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
+//           ? highQualityChunks 
+//           : rankedChunks;
+
+//         for (const chunk of chunksToConsider) {
+//           if (selectedChunks.length >= MAX_CHUNKS) break;
+          
+//           const chunkLength = chunk.content.length;
+//           if (currentContextLength + chunkLength <= MAX_CONTEXT_CHARS) {
+//             selectedChunks.push(chunk);
+//             currentContextLength += chunkLength;
+//           } else if (selectedChunks.length < MIN_CHUNKS) {
+//             const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
+//             if (remainingSpace > 500) {
+//               selectedChunks.push({
+//                 ...chunk,
+//                 content: chunk.content.substring(0, remainingSpace - 100) + "..."
+//               });
+//               currentContextLength += remainingSpace;
+//             }
+//             break;
+//           }
+//         }
+
+//         const finalChunks = selectedChunks.length >= MIN_CHUNKS 
+//           ? selectedChunks 
+//           : chunksToConsider.slice(0, MIN_CHUNKS);
+
+//         console.log(`✅ Selected ${finalChunks.length} chunks | Context: ${currentContextLength} chars (~${Math.ceil(currentContextLength / CHARS_PER_TOKEN)} tokens)`);
+
+//         usedChunkIds = finalChunks.map((c) => c.chunk_id || c.id);
+
+//         // Build context with separators and metadata
+//         const relevantTexts = finalChunks
+//           .map((c, idx) => {
+//             const similarity = c.similarity || c.distance || 0;
+//             const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+//             return `--- Chunk ${idx + 1} | Relevance: ${(score * 100).toFixed(1)}% ---\n${c.content}`;
+//           })
+//           .join('\n\n');
+
+//         finalPrompt = `${storedQuestion}\n\n=== RELEVANT CONTEXT ===\n${relevantTexts}`;
+//       }
+//     }
+
+//     // ✅ CRITICAL: Append conversation history to the prompt
+//     finalPrompt = appendConversationToPrompt(finalPrompt, conversationContext);
+
+//     // ---------- CALL LLM ----------
+//     console.log(`[chatWithDocument] Calling LLM provider: ${provider} | Chunks used: ${usedChunkIds.length}`);
+//     const answer = await askLLM(provider, finalPrompt, '');
+
+//     if (!answer?.trim()) {
+//       return res.status(500).json({ error: 'Empty response from AI.' });
+//     }
+
+//     console.log(`[chatWithDocument] Received answer, length: ${answer.length} characters`);
+
+//     // ---------- SAVE CHAT ----------
+//     const savedChat = await FileChat.saveChat(
+//       file_id,
+//       userId,
+//       storedQuestion,
+//       answer,
+//       finalSessionId,
+//       usedChunkIds,
+//       used_secret_prompt,
+//       finalPromptLabel,
+//       used_secret_prompt ? secret_id : null,
+//       historyForStorage  // ✅ This includes both pre-upload and post-upload context
+//     );
+
+//     console.log(`[chatWithDocument] Chat saved with ID: ${savedChat.id} | Chunks used: ${usedChunkIds.length}`);
+
+//     // ---------- TOKEN USAGE ----------
+//     try {
+//       const { userUsage, userPlan, requestedResources } = req;
+//       await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
+//     } catch (e) {
+//       console.warn('Token usage increment failed:', e.message);
+//     }
+
+//     // ---------- FETCH HISTORY ----------
+//     const historyRows = await FileChat.getChatHistory(file_id, savedChat.session_id);
+//     const history = historyRows.map((row) => ({
+//       id: row.id,
+//       file_id: row.file_id,
+//       session_id: row.session_id,
+//       question: row.question,
+//       answer: row.answer,
+//       used_secret_prompt: row.used_secret_prompt || false,
+//       prompt_label: row.prompt_label || null,
+//       secret_id: row.secret_id || null,
+//       used_chunk_ids: row.used_chunk_ids || [],
+//       confidence: row.confidence || 0.8,
+//       timestamp: row.created_at || row.timestamp,
+//       chat_history: row.chat_history || [],
+//       display_text_left_panel: row.used_secret_prompt
+//         ? `Analysis: ${row.prompt_label || 'Secret Prompt'}`
+//         : row.question,
+//     }));
+
+//     // ---------- RETURN COMPLETE RESPONSE ----------
+//     return res.status(200).json({
+//       success: true,
+//       session_id: savedChat.session_id,
+//       message_id: savedChat.id,
+//       answer,
+//       response: answer,
+//       history,
+//       used_chunk_ids: usedChunkIds,
+//       chunks_used: usedChunkIds.length,
+//       confidence: used_secret_prompt ? 0.9 : 0.85,
+//       timestamp: savedChat.created_at || new Date().toISOString(),
+//       llm_provider: provider,
+//       used_secret_prompt,
+//       mode: 'post_document',  // Indicates this is a post-upload conversation
+//     });
+//   } catch (error) {
+//     console.error('❌ Error in chatWithDocument:', error);
+//     console.error('Stack trace:', error.stack);
+//     return res.status(500).json({
+//       error: 'Failed to get AI answer.',
+//       details: error.message,
+//     });
+//   }
+// };
 exports.chatWithDocument = async (req, res) => {
   let userId = null;
 
@@ -2262,21 +2121,155 @@ exports.chatWithDocument = async (req, res) => {
 
     // ---------- VALIDATION ----------
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!file_id) return res.status(400).json({ error: 'file_id is required.' });
-    if (!uuidRegex.test(file_id)) return res.status(400).json({ error: 'Invalid file ID format.' });
+    const hasFileId = Boolean(file_id);
+    
+    // Only validate file_id format if it's provided
+    if (hasFileId && !uuidRegex.test(file_id)) {
+      return res.status(400).json({ error: 'Invalid file ID format.' });
+    }
 
+    // Generate or validate session_id
     const hasExistingSession = session_id && uuidRegex.test(session_id);
     const finalSessionId = hasExistingSession ? session_id : uuidv4();
 
     console.log(
-      `[chatWithDocument] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}, session_id=${finalSessionId}`
+      `[chatWithDocument] started: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}, session_id=${finalSessionId}, has_file=${hasFileId}`
     );
+
+    // Load existing session history (works for both file-based and file-less sessions)
+    const sessionHistory = hasExistingSession
+      ? await FileChat.getChatHistoryBySession(userId, finalSessionId)
+      : [];
+
+    console.log(`[chatWithDocument] Loaded ${sessionHistory.length} previous messages from session`);
+
+    // ================================
+    // CASE 1: NO DOCUMENT YET (PRE-UPLOAD CHAT)
+    // ================================
+    if (!hasFileId) {
+      if (!question?.trim()) {
+        return res.status(400).json({ error: 'question is required when no document is provided.' });
+      }
+
+      console.log(`[chatWithDocument] Pre-upload mode - chatting without document`);
+
+      // For pre-upload chats, use llm_name from request OR fetch from custom_query table
+      let dbLlmName = llm_name; // Use the one from request first
+      
+      // If no llm_name in request, fetch from custom_query table
+      if (!dbLlmName) {
+        const customQueryLlm = `
+          SELECT cq.llm_name, cq.llm_model_id
+          FROM custom_query cq
+          ORDER BY cq.id DESC
+          LIMIT 1;
+        `;
+        const customQueryResult = await db.query(customQueryLlm);
+        if (customQueryResult.rows.length > 0) {
+          dbLlmName = customQueryResult.rows[0].llm_name;
+          console.log(`🤖 Using LLM from custom_query table: ${dbLlmName}`);
+        } else {
+          console.warn(`⚠️ No LLM found in custom_query table — falling back to gemini`);
+          dbLlmName = 'gemini';
+        }
+      }
+
+      let provider = resolveProviderName(dbLlmName || 'gemini');
+      console.log(`[chatWithDocument] Resolved provider for pre-upload: ${provider}`);
+      
+      const availableProviders = getAvailableProviders();
+      if (!availableProviders[provider] || !availableProviders[provider].available) {
+        console.warn(`⚠️ Provider '${provider}' unavailable — falling back to gemini for pre-upload chat`);
+        provider = 'gemini';
+      }
+
+      // Build prompt with conversation history
+      const userPrompt = question.trim();
+      const conversationContext = formatConversationHistory(sessionHistory);
+      const finalPrompt = appendConversationToPrompt(userPrompt, conversationContext);
+
+      console.log(`[chatWithDocument] Pre-upload conversation | Provider: ${provider} | Session: ${finalSessionId}`);
+      console.log(`[chatWithDocument] Prompt length: ${finalPrompt.length} chars | History turns: ${sessionHistory.length}`);
+      
+      // Get AI response
+      const answer = await askLLM(provider, finalPrompt, ''); // Empty context since it's already in prompt
+
+      if (!answer?.trim()) {
+        return res.status(500).json({ error: 'Empty response from AI.' });
+      }
+
+      console.log(`✅ [chatWithDocument] Received answer: ${answer.length} chars`);
+
+      // Save chat without file_id
+      const savedChat = await FileChat.saveChat(
+        null,              // No file_id for pre-upload chat
+        userId,
+        userPrompt,
+        answer,
+        finalSessionId,
+        [],                // No chunks used
+        false,             // Not a secret prompt
+        null,              // No prompt label
+        null,              // No secret_id
+        simplifyHistory(sessionHistory)  // Store conversation context
+      );
+
+      // Fetch updated history
+      const updatedHistoryRows = await FileChat.getChatHistoryBySession(userId, finalSessionId);
+      const history = updatedHistoryRows.map((row) => ({
+        id: row.id,
+        file_id: row.file_id,
+        session_id: row.session_id,
+        question: row.question,
+        answer: row.answer,
+        used_secret_prompt: row.used_secret_prompt || false,
+        prompt_label: row.prompt_label || null,
+        secret_id: row.secret_id || null,
+        used_chunk_ids: row.used_chunk_ids || [],
+        confidence: row.confidence || 0.8,
+        timestamp: row.created_at || row.timestamp,
+        display_text_left_panel: row.used_secret_prompt
+          ? `Analysis: ${row.prompt_label || 'Secret Prompt'}`
+          : row.question,
+      }));
+
+      // Increment usage
+      try {
+        const { userUsage, userPlan, requestedResources } = req;
+        await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
+      } catch (e) {
+        console.warn('Token usage increment failed for pre-upload chat:', e.message);
+      }
+
+      return res.status(200).json({
+        success: true,
+        session_id: finalSessionId,
+        message_id: savedChat.id,
+        answer,
+        response: answer,
+        history,
+        used_chunk_ids: [],
+        chunks_used: 0,
+        confidence: 0.8,
+        timestamp: savedChat.created_at || new Date().toISOString(),
+        llm_provider: provider,
+        used_secret_prompt: false,
+        mode: 'pre_document',  // Indicates this is a pre-upload conversation
+      });
+    }
+
+    // ================================
+    // CASE 2: DOCUMENT PROVIDED (POST-UPLOAD CHAT)
+    // ================================
+    
+    console.log(`[chatWithDocument] Post-upload mode - chatting with document ${file_id}`);
 
     // ---------- FILE ACCESS ----------
     const file = await DocumentModel.getFileById(file_id);
     if (!file) return res.status(404).json({ error: 'File not found.' });
-    if (String(file.user_id) !== String(userId))
+    if (String(file.user_id) !== String(userId)) {
       return res.status(403).json({ error: 'Access denied.' });
+    }
     if (file.status !== 'processed') {
       return res.status(400).json({
         error: 'Document is not yet processed.',
@@ -2285,12 +2278,25 @@ exports.chatWithDocument = async (req, res) => {
       });
     }
 
+    // Link pre-upload chats to this file if they exist
+    if (sessionHistory.length > 0) {
+      const hasUnassignedChats = sessionHistory.some((chat) => !chat.file_id);
+      if (hasUnassignedChats) {
+        const linkedCount = await FileChat.assignFileIdToSession(userId, finalSessionId, file_id);
+        console.log(`✅ Linked ${linkedCount} pre-upload chat(s) to file ${file_id}`);
+      }
+    }
+
+    // Load previous chats for this file + session
     let previousChats = [];
     if (hasExistingSession) {
       previousChats = await FileChat.getChatHistory(file_id, finalSessionId);
     }
+
+    // Build conversation context from ALL chats (pre-upload + post-upload)
     const conversationContext = formatConversationHistory(previousChats);
     const historyForStorage = simplifyHistory(previousChats);
+    
     if (historyForStorage.length > 0) {
       const lastTurn = historyForStorage[historyForStorage.length - 1];
       console.log(
@@ -2301,12 +2307,12 @@ exports.chatWithDocument = async (req, res) => {
     }
 
     // ✅ RAG CONFIGURATION
-    const SIMILARITY_THRESHOLD = 0.75; // Cosine similarity cutoff
-    const MIN_CHUNKS = 5; // Minimum chunks to retrieve
-    const MAX_CHUNKS = 10; // Maximum chunks to retrieve
-    const MAX_CONTEXT_TOKENS = 4000; // ~15% of model limit
-    const CHARS_PER_TOKEN = 4; // Average chars per token
-    const MAX_CONTEXT_CHARS = MAX_CONTEXT_TOKENS * CHARS_PER_TOKEN; // ~16,000 chars
+    const SIMILARITY_THRESHOLD = 0.75;
+    const MIN_CHUNKS = 5;
+    const MAX_CHUNKS = 10;
+    const MAX_CONTEXT_TOKENS = 4000;
+    const CHARS_PER_TOKEN = 4;
+    const MAX_CONTEXT_CHARS = MAX_CONTEXT_TOKENS * CHARS_PER_TOKEN;
 
     // ---------- PROMPT BUILDING ----------
     let usedChunkIds = [];
@@ -2316,11 +2322,12 @@ exports.chatWithDocument = async (req, res) => {
     let finalPrompt = '';
 
     // ================================
-    // CASE 1: SECRET PROMPT
+    // SECRET PROMPT HANDLING
     // ================================
     if (used_secret_prompt) {
-      if (!secret_id)
+      if (!secret_id) {
         return res.status(400).json({ error: 'secret_id required for secret prompt.' });
+      }
 
       const secretQuery = `
         SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
@@ -2328,8 +2335,9 @@ exports.chatWithDocument = async (req, res) => {
         LEFT JOIN llm_models l ON s.llm_id = l.id
         WHERE s.id = $1`;
       const secretResult = await db.query(secretQuery, [secret_id]);
-      if (!secretResult.rows.length)
+      if (!secretResult.rows.length) {
         return res.status(404).json({ error: 'Secret configuration not found.' });
+      }
 
       const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } =
         secretResult.rows[0];
@@ -2343,22 +2351,22 @@ exports.chatWithDocument = async (req, res) => {
       const [accessResponse] = await client.accessSecretVersion({ name: gcpSecretName });
       const secretValue = accessResponse.payload.data.toString('utf8');
 
-      // ✅ Get all chunks and apply smart selection
+      // Get all chunks and apply smart selection
       const allChunks = await FileChunkModel.getChunksByFileId(file_id);
       
       if (!allChunks || allChunks.length === 0) {
         return res.status(400).json({ error: 'No content found in document.' });
       }
 
-      // ✅ For secret prompts, use embedding-based selection
+      // Use embedding-based selection for secret prompts
       const secretEmbedding = await generateEmbedding(secretValue);
       const rankedChunks = await ChunkVectorModel.findNearestChunks(
         secretEmbedding,
-        MAX_CHUNKS, // Retrieve top 10 candidates
+        MAX_CHUNKS,
         file_id
       );
 
-      // ✅ Filter by similarity threshold
+      // Filter by similarity threshold
       const highQualityChunks = rankedChunks
         .filter(chunk => {
           const similarity = chunk.similarity || chunk.distance || 0;
@@ -2368,18 +2376,18 @@ exports.chatWithDocument = async (req, res) => {
         .sort((a, b) => {
           const scoreA = a.similarity > 1 ? (1 / (1 + a.similarity)) : a.similarity;
           const scoreB = b.similarity > 1 ? (1 / (1 + b.similarity)) : b.similarity;
-          return scoreB - scoreA; // Best first
+          return scoreB - scoreA;
         });
 
       console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${rankedChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
 
-      // ✅ Select 5-10 best chunks within token budget
+      // Select 5-10 best chunks within token budget
       let selectedChunks = [];
       let currentContextLength = 0;
 
       const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
         ? highQualityChunks 
-        : rankedChunks; // Fallback if not enough high-quality chunks
+        : rankedChunks;
 
       for (const chunk of chunksToConsider) {
         if (selectedChunks.length >= MAX_CHUNKS) break;
@@ -2389,7 +2397,6 @@ exports.chatWithDocument = async (req, res) => {
           selectedChunks.push(chunk);
           currentContextLength += chunkLength;
         } else if (selectedChunks.length < MIN_CHUNKS) {
-          // If we haven't reached minimum, truncate this chunk to fit
           const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
           if (remainingSpace > 500) {
             selectedChunks.push({
@@ -2402,7 +2409,6 @@ exports.chatWithDocument = async (req, res) => {
         }
       }
 
-      // ✅ Ensure minimum chunks
       const finalChunks = selectedChunks.length >= MIN_CHUNKS 
         ? selectedChunks 
         : chunksToConsider.slice(0, MIN_CHUNKS);
@@ -2411,7 +2417,7 @@ exports.chatWithDocument = async (req, res) => {
 
       usedChunkIds = finalChunks.map((c) => c.chunk_id || c.id);
 
-      // ✅ Build context with separators and metadata
+      // Build context with separators and metadata
       const docContent = finalChunks
         .map((c, idx) => {
           const similarity = c.similarity || c.distance || 0;
@@ -2430,15 +2436,16 @@ exports.chatWithDocument = async (req, res) => {
       storedQuestion = secretName;
     } 
     // ================================
-    // CASE 2: CUSTOM QUESTION
+    // CUSTOM QUESTION HANDLING
     // ================================
     else {
-      if (!question?.trim())
+      if (!question?.trim()) {
         return res.status(400).json({ error: 'question is required.' });
+      }
 
       storedQuestion = question.trim();
 
-      // Fetch LLM model from custom_query table for custom queries (always fetch from DB)
+      // ✅ KEEP ORIGINAL LOGIC: Fetch LLM model from custom_query table for custom queries
       let dbLlmName = null;
       const customQueryLlm = `
         SELECT cq.llm_name, cq.llm_model_id
@@ -2466,11 +2473,11 @@ exports.chatWithDocument = async (req, res) => {
         provider = 'gemini';
       }
 
-      // ✅ Vector search with similarity scoring
+      // Vector search with similarity scoring
       const questionEmbedding = await generateEmbedding(storedQuestion);
       const rankedChunks = await ChunkVectorModel.findNearestChunks(
         questionEmbedding,
-        MAX_CHUNKS, // Retrieve top 10 candidates
+        MAX_CHUNKS,
         file_id
       );
 
@@ -2487,7 +2494,7 @@ exports.chatWithDocument = async (req, res) => {
         
         finalPrompt = `${storedQuestion}\n\n=== DOCUMENT CONTEXT ===\n${docContent}`;
       } else {
-        // ✅ Filter by similarity threshold
+        // Filter by similarity threshold
         const highQualityChunks = rankedChunks
           .filter(chunk => {
             const similarity = chunk.similarity || chunk.distance || 0;
@@ -2502,7 +2509,7 @@ exports.chatWithDocument = async (req, res) => {
 
         console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${rankedChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
 
-        // ✅ Select 5-10 best chunks within token budget
+        // Select 5-10 best chunks within token budget
         let selectedChunks = [];
         let currentContextLength = 0;
 
@@ -2530,7 +2537,6 @@ exports.chatWithDocument = async (req, res) => {
           }
         }
 
-        // ✅ Ensure minimum chunks
         const finalChunks = selectedChunks.length >= MIN_CHUNKS 
           ? selectedChunks 
           : chunksToConsider.slice(0, MIN_CHUNKS);
@@ -2539,7 +2545,7 @@ exports.chatWithDocument = async (req, res) => {
 
         usedChunkIds = finalChunks.map((c) => c.chunk_id || c.id);
 
-        // ✅ Build context with separators and metadata
+        // Build context with separators and metadata
         const relevantTexts = finalChunks
           .map((c, idx) => {
             const similarity = c.similarity || c.distance || 0;
@@ -2552,11 +2558,12 @@ exports.chatWithDocument = async (req, res) => {
       }
     }
 
+    // ✅ CRITICAL: Append conversation history to the prompt
     finalPrompt = appendConversationToPrompt(finalPrompt, conversationContext);
 
     // ---------- CALL LLM ----------
     console.log(`[chatWithDocument] Calling LLM provider: ${provider} | Chunks used: ${usedChunkIds.length}`);
-    const answer = await askLLM(provider, finalPrompt);
+    const answer = await askLLM(provider, finalPrompt, '');
 
     if (!answer?.trim()) {
       return res.status(500).json({ error: 'Empty response from AI.' });
@@ -2575,7 +2582,7 @@ exports.chatWithDocument = async (req, res) => {
       used_secret_prompt,
       finalPromptLabel,
       used_secret_prompt ? secret_id : null,
-      historyForStorage
+      historyForStorage  // ✅ This includes both pre-upload and post-upload context
     );
 
     console.log(`[chatWithDocument] Chat saved with ID: ${savedChat.id} | Chunks used: ${usedChunkIds.length}`);
@@ -2617,11 +2624,12 @@ exports.chatWithDocument = async (req, res) => {
       response: answer,
       history,
       used_chunk_ids: usedChunkIds,
-      chunks_used: usedChunkIds.length, // ✅ Show actual count
+      chunks_used: usedChunkIds.length,
       confidence: used_secret_prompt ? 0.9 : 0.85,
       timestamp: savedChat.created_at || new Date().toISOString(),
       llm_provider: provider,
       used_secret_prompt,
+      mode: 'post_document',  // Indicates this is a post-upload conversation
     });
   } catch (error) {
     console.error('❌ Error in chatWithDocument:', error);
@@ -2634,230 +2642,7 @@ exports.chatWithDocument = async (req, res) => {
 };
 
 
-// exports.chatWithDocument = async (req, res) => {
-//  let userId = null;
 
-//  try {
-//  const {
-//  file_id,
-//  question, // For custom queries
-//  used_secret_prompt = false,
-//  prompt_label = null,
-//  session_id = null,
-//  secret_id, // NEW: For secret prompts
-//  llm_name, // NEW: Optional LLM override
-//  additional_input = '', // NEW: Additional input for secret prompts
-//  } = req.body;
-
-//  userId = req.user.id;
-
-//  // Validation
-//  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-//  if (!file_id) {
-//  return res.status(400).json({ error: "file_id is required." });
-//  }
-//  if (!uuidRegex.test(file_id)) {
-//  return res.status(400).json({ error: "Invalid file ID format." });
-//  }
-
-//  // Generate session ID if not provided
-//  const finalSessionId = session_id || `session-${Date.now()}`;
-
-//  console.log(`[chatWithDocument] Processing request: used_secret_prompt=${used_secret_prompt}, secret_id=${secret_id}, llm_name=${llm_name}`);
-
-//  // Check file access
-//  const file = await DocumentModel.getFileById(file_id);
-//  if (!file) return res.status(404).json({ error: "File not found." });
-//  if (String(file.user_id) !== String(userId)) {
-//  return res.status(403).json({ error: "Access denied." });
-//  }
-//  if (file.status !== "processed") {
-//  return res.status(400).json({
-//  error: "Document is not yet processed.",
-//  status: file.status,
-//  progress: file.processing_progress,
-//  });
-//  }
-
-//  let answer;
-//  let usedChunkIds = [];
-//  let storedQuestion;
-//  let finalPromptLabel = prompt_label;
-//  let provider; // Declare provider here to make it accessible in the final return
-
-//  // ================================
-//  // CASE 1: SECRET PROMPT HANDLING
-//  // ================================
-//  if (used_secret_prompt) {
-//  if (!secret_id) {
-//  return res.status(400).json({ error: "secret_id is required for secret prompts." });
-//  }
-
-//  console.log(`[chatWithDocument] Handling secret prompt: ${secret_id}`);
-
-//  // Fetch secret configuration from DB
-//  const secretQuery = `
-//  SELECT s.id, s.name, s.secret_manager_id, s.version, s.llm_id, l.name AS llm_name
-//  FROM secret_manager s
-//  LEFT JOIN llm_models l ON s.llm_id = l.id
-//  WHERE s.id = $1
-//  `;
-//  const secretResult = await db.query(secretQuery, [secret_id]);
-
-//  if (secretResult.rows.length === 0) {
-//  return res.status(404).json({ error: "Secret configuration not found." });
-//  }
-
-//  const { name: secretName, secret_manager_id, version, llm_name: dbLlmName } = secretResult.rows[0];
-//  finalPromptLabel = secretName;
-
-//  // Resolve LLM provider (prioritize request llm_name, then DB, then default)
-//  provider = resolveProviderName(llm_name || dbLlmName || 'gemini'); // Assign to the higher-scoped provider
-//  console.log(`[chatWithDocument] Using LLM provider: ${provider}`);
-
-//  // Fetch secret value from GCP Secret Manager
-//  const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
-//  const secretClient = new SecretManagerServiceClient();
-//  const GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
- 
-//  const gcpSecretName = `projects/${GCLOUD_PROJECT_ID}/secrets/${secret_manager_id}/versions/${version}`;
-//  const [accessResponse] = await secretClient.accessSecretVersion({ name: gcpSecretName });
-//  const secretValue = accessResponse.payload.data.toString('utf8');
-
-//  if (!secretValue?.trim()) {
-//  return res.status(500).json({ error: "Secret value is empty." });
-//  }
-
-//  // Fetch all document chunks for secret prompts (use full context)
-//  const allChunks = await FileChunkModel.getChunksByFileId(file_id);
-//  if (!allChunks?.length) {
-//  return res.status(404).json({ error: "No document content found." });
-//  }
- 
-//  usedChunkIds = allChunks.map(c => c.id);
-//  const documentContent = allChunks.map(c => c.content).join('\n\n');
-
-//  // Construct final prompt
-//  let finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n`;
-//  finalPrompt += `${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${documentContent}`;
-
-//  if (additional_input?.trim()) {
-//  finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additional_input.trim()}`;
-//  }
-
-//  console.log(`[chatWithDocument] Secret prompt length: ${finalPrompt.length}`);
- 
-//  // Call LLM with selected provider
-//  answer = await askLLM(provider, finalPrompt);
- 
-//  storedQuestion = secretName; // Store secret name as question
-
-//  }
-//  // ================================
-//  // CASE 2: CUSTOM QUERY HANDLING
-//  // ================================
-//  else {
-//  if (!question?.trim()) {
-//  return res.status(400).json({ error: "question is required for custom queries." });
-//  }
-
-//  console.log(`[chatWithDocument] Handling custom query: "${question.substring(0, 50)}..."`);
-
-//  // For custom queries, always use 'gemini' as the provider.
-//  provider = 'gemini'; // Assign to the higher-scoped provider
-//  console.log(`[chatWithDocument] Custom query using fixed provider: ${provider}`);
-
-//  // Use vector search for relevant context (existing logic)
-//  const questionEmbedding = await generateEmbedding(question);
-//  const relevantChunks = await ChunkVectorModel.findNearestChunks(questionEmbedding, 5, file_id);
-//  const relevantChunkContents = relevantChunks.map(chunk => chunk.content);
-//  usedChunkIds = relevantChunks.map(chunk => chunk.chunk_id);
-
-//  if (relevantChunkContents.length === 0) {
-//  console.log(`[chatWithDocument] No relevant chunks, using full document`);
-//  const allChunks = await FileChunkModel.getChunksByFileId(file_id);
-//  const documentFullText = allChunks.map(c => c.content).join("\n\n");
-//  answer = await askLLM(provider, question, documentFullText);
-//  } else {
-//  const context = relevantChunkContents.join("\n\n");
-//  console.log(`[chatWithDocument] Using ${relevantChunkContents.length} relevant chunks`);
-//  answer = await askLLM(provider, question, context);
-//  }
-
-//  storedQuestion = question; // Store actual question
-//  }
-
-//  if (!answer?.trim()) {
-//  return res.status(500).json({ error: "Empty response from AI." });
-//  }
-
-//  console.log(`[chatWithDocument] Answer length: ${answer.length} characters`);
-
-//  // Store chat in database
-//  const savedChat = await FileChat.saveChat(
-//  file_id,
-//  userId,
-//  storedQuestion,
-//  answer,
-//  finalSessionId,
-//  usedChunkIds,
-//  used_secret_prompt,
-//  finalPromptLabel, // prompt_label
-//  used_secret_prompt ? secret_id : null // secret_id (now passed to saveChat)
-//  );
-
-//  console.log(`[chatWithDocument] ✅ Chat saved with ID: ${savedChat.id}`);
-
-//  // Increment usage
-//  const { userUsage, userPlan, requestedResources } = req;
-//  await TokenUsageService.incrementUsage(userId, requestedResources, userUsage, userPlan);
-
-//  // Fetch full session history
-//  const historyRows = await FileChat.getChatHistory(file_id, finalSessionId);
-//  const history = historyRows.map(row => ({
-//  id: row.id,
-//  file_id: row.file_id,
-//  session_id: row.session_id,
-//  question: row.question,
-//  answer: row.answer,
-//  used_secret_prompt: row.used_secret_prompt || false,
-//  prompt_label: row.prompt_label || null,
-//  secret_id: row.secret_id || null,
-//  used_chunk_ids: row.used_chunk_ids || [],
-//  confidence: row.confidence || 0.8,
-//  timestamp: row.created_at || row.timestamp,
-//  display_text_left_panel: row.used_secret_prompt
-//  ? `Analysis: ${row.prompt_label || 'Secret Prompt'}`
-//  : row.question
-//  }));
-
-//  return res.json({
-//  success: true,
-//  session_id: finalSessionId,
-//  message_id: savedChat.id,
-//  answer,
-//  response: answer,
-//  history,
-//  used_chunk_ids: usedChunkIds,
-//  confidence: used_secret_prompt ? 0.9 : 0.85, // Higher confidence for secret prompts
-//  timestamp: savedChat.created_at || new Date().toISOString(),
-//  llm_provider: provider, // Include which LLM was used
-//  used_secret_prompt: used_secret_prompt
-//  });
-
-//  } catch (error) {
-//  console.error("❌ Error in chatWithDocument:", error);
-//  console.error("Stack trace:", error.stack);
-//  return res.status(500).json({
-//  error: "Failed to get AI answer.",
-//  details: error.message
-//  });
-//  }
-// };
-/**
- * @description Saves edited HTML content of a document by converting it to DOCX and PDF, then uploading to GCS.
- * @route POST /api/doc/save
- */
 exports.saveEditedDocument = async (req, res) => {
  try {
  const { file_id, edited_html } = req.body;
@@ -2990,1311 +2775,6 @@ exports.getChatHistory = async (req, res) => {
 };
 
 
-
-// exports.getDocumentProcessingStatus = async (req, res) => {
-// try {
-// const { file_id } = req.params;
-// if (!file_id) {
-// return res.status(400).json({ error: "file_id is required." });
-// }
-
-// console.log(`[getDocumentProcessingStatus] Received request for file_id: ${file_id}`);
-
-// const file = await DocumentModel.getFileById(file_id);
-// if (!file || String(file.user_id) !== String(req.user.id)) {
-// return res.status(403).json({ error: "Access denied or file not found." });
-// }
-
-// const job = await ProcessingJobModel.getJobByFileId(file_id);
-
-// // If already processed
-// if (file.status === "processed") {
-// const existingChunks = await FileChunkModel.getChunksByFileId(file_id);
-// return res.json({
-// document_id: file.id,
-// status: file.status,
-// processing_progress: file.processing_progress,
-// job_status: job ? job.status : "completed",
-// job_error: job ? job.error_message : null,
-// last_updated: file.updated_at,
-// chunks: existingChunks,
-// summary: file.summary,
-// });
-// }
-
-// // No job yet
-// if (!job || !job.document_ai_operation_name) {
-// return res.json({
-// document_id: file.id,
-// status: file.status,
-// processing_progress: file.processing_progress,
-// job_status: "not_queued",
-// job_error: null,
-// last_updated: file.updated_at,
-// chunks: [],
-// summary: file.summary,
-// });
-// }
-
-// console.log(`[getDocumentProcessingStatus] Checking Document AI operation status for job: ${job.document_ai_operation_name}`);
-// const status = await getOperationStatus(job.document_ai_operation_name);
-// console.log(`[getDocumentProcessingStatus] Document AI operation status: ${JSON.stringify(status)}`);
-
-// // If still running
-// if (!status.done) {
-// return res.json({
-// file_id: file.id,
-// status: "batch_processing",
-// processing_progress: file.processing_progress,
-// job_status: "running",
-// job_error: null,
-// last_updated: file.updated_at,
-// });
-// }
-
-// // If failed
-// if (status.error) {
-// await DocumentModel.updateFileStatus(file_id, "error", 0.0);
-// await ProcessingJobModel.updateJobStatus(job.id, "failed", status.error.message);
-// return res.status(500).json({
-// file_id: file.id,
-// status: "error",
-// processing_progress: 0.0,
-// job_status: "failed",
-// job_error: status.error.message,
-// last_updated: new Date().toISOString(),
-// });
-// }
-
-// // Fetch processed text
-// const bucketName = process.env.GCS_OUTPUT_BUCKET_NAME;
-// const prefix = job.gcs_output_uri_prefix.replace(`gs://${bucketName}/`, "");
-// const extractedBatchTexts = await fetchBatchResults(bucketName, prefix);
-// console.log(`[getDocumentProcessingStatus] Extracted ${extractedBatchTexts.length} text items from batch results.`);
-
-// await DocumentModel.updateFileStatus(file_id, "processing", 75.0);
-
-// // ✅ Fetch chunking method via secret_manager → chunking_methods
-// let batchChunkingMethod = "recursive";
-// try {
-// const chunkMethodQuery = `
-// SELECT cm.method_name
-// FROM processing_jobs pj
-// LEFT JOIN secret_manager sm ON pj.secret_id = sm.id
-// LEFT JOIN chunking_methods cm ON sm.chunking_method_id = cm.id
-// WHERE pj.file_id = $1
-// ORDER BY pj.created_at DESC
-// LIMIT 1;
-// `;
-// const result = await db.query(chunkMethodQuery, [file_id]);
-
-// if (result.rows.length > 0) {
-// batchChunkingMethod = result.rows[0].method_name;
-// console.log(`[getDocumentProcessingStatus] ✅ Using chunking method from DB: ${batchChunkingMethod}`);
-// } else {
-// console.log(`[getDocumentProcessingStatus] No secret_id found for file ${file_id}, using default chunking method.`);
-// }
-// } catch (err) {
-// console.error(`[getDocumentProcessingStatus] Error fetching chunking method: ${err.message}`);
-// console.log(`[getDocumentProcessingStatus] Falling back to default chunking method: recursive`);
-// }
-
-// // ✅ Chunking
-// console.log(`[getDocumentProcessingStatus] Starting chunking for file ID ${file_id} using method: ${batchChunkingMethod}`);
-// const chunks = await chunkDocument(extractedBatchTexts, file_id, batchChunkingMethod);
-
-// // Save chunks and vectors
-// const chunkContents = chunks.map(c => c.content);
-// const embeddings = await generateEmbeddings(chunkContents);
-
-// const chunksToSave = chunks.map((chunk, i) => ({
-// file_id,
-// chunk_index: i,
-// content: chunk.content,
-// token_count: chunk.token_count,
-// page_start: chunk.metadata.page_start,
-// page_end: chunk.metadata.page_end,
-// heading: chunk.metadata.heading,
-// }));
-
-// await FileChunkModel.saveMultipleChunks(chunksToSave);
-
-// const savedChunks = await FileChunkModel.getChunksByFileId(file_id);
-// const vectors = savedChunks.map((chunk, i) => ({
-// chunk_id: chunk.id,
-// embedding: embeddings[i],
-// file_id,
-// }));
-
-// await ChunkVectorModel.saveMultipleChunkVectors(vectors);
-
-// await DocumentModel.updateFileStatus(file_id, "processed", 100.0);
-// await ProcessingJobModel.updateJobStatus(job.id, "completed");
-
-// // Generate summary
-// const fullText = chunks.map(c => c.content).join("\n\n");
-// try {
-// const summary = await getSummaryFromChunks(fullText);
-// await DocumentModel.updateFileSummary(file_id, summary);
-// } catch (err) {
-// console.warn(`[getDocumentProcessingStatus] ⚠️ Summary generation failed: ${err.message}`);
-// }
-
-// // Return final response
-// const updatedFile = await DocumentModel.getFileById(file_id);
-// const finalChunks = await FileChunkModel.getChunksByFileId(file_id);
-
-// return res.json({
-// document_id: updatedFile.id,
-// status: updatedFile.status,
-// processing_progress: updatedFile.processing_progress,
-// job_status: "completed",
-// job_error: null,
-// last_updated: updatedFile.updated_at,
-// chunks: finalChunks,
-// summary: updatedFile.summary,
-// chunking_method: batchChunkingMethod,
-// });
-
-// } catch (error) {
-// console.error("❌ getDocumentProcessingStatus error:", error);
-// return res.status(500).json({
-// error: "Failed to fetch processing status.",
-// details: error.message,
-// });
-// }
-// };
-
-// exports.getDocumentProcessingStatus = async (req, res) => {
-//  try {
-//  const { file_id } = req.params;
-//  if (!file_id) {
-//  return res.status(400).json({ error: "file_id is required." });
-//  }
-
-//  console.log(`[getDocumentProcessingStatus] Checking status for file_id: ${file_id}`);
-
-//  const file = await DocumentModel.getFileById(file_id);
-//  if (!file || String(file.user_id) !== String(req.user.id)) {
-//  return res.status(403).json({ error: "Access denied or file not found." });
-//  }
-
-//  const job = await ProcessingJobModel.getJobByFileId(file_id);
-
-//  // Prepare base response
-//  const baseResponse = {
-//  document_id: file.id,
-//  filename: file.filename,
-//  status: file.status,
-//  processing_progress: parseFloat(file.processing_progress) || 0,
-//  current_operation: file.current_operation || "Pending",
-//  job_status: job ? job.status : "unknown",
-//  job_error: job ? job.error_message : null,
-//  last_updated: file.updated_at,
-//  file_size: file.file_size,
-//  mime_type: file.mime_type,
-//  };
-
-//  // Case 1: Document is fully processed
-//  if (file.status === "processed") {
-//  const chunks = await FileChunkModel.getChunksByFileId(file_id);
-//  return res.json({
-//  ...baseResponse,
-//  processing_progress: 100,
-//  current_operation: "Completed",
-//  chunks: chunks,
-//  chunk_count: chunks.length,
-//  summary: file.summary,
-//  processed_at: file.processed_at,
-//  });
-//  }
-
-//  // Case 2: Document processing failed
-//  if (file.status === "error") {
-//  return res.json({
-//  ...baseResponse,
-//  processing_progress: 0,
-//  current_operation: "Failed",
-//  error_details: job ? job.error_message : "Unknown error occurred",
-//  });
-//  }
-
-//  // Case 3: Synchronous processing in progress
-//  if (file.status === "processing") {
-//  return res.json({
-//  ...baseResponse,
-//  message: "Document is being processed. Progress updates in real-time.",
-//  });
-//  }
-
-//  // Case 4: Batch processing
-//  if (file.status === "batch_processing" || file.status === "batch_queued") {
-//  if (!job || !job.document_ai_operation_name) {
-//  return res.json({
-//  ...baseResponse,
-//  current_operation: "Queued for batch processing",
-//  message: "Document is queued for batch processing.",
-//  });
-//  }
-
-//  console.log(`[getDocumentProcessingStatus] Checking Document AI batch operation: ${job.document_ai_operation_name}`);
-//  const operationStatus = await getOperationStatus(job.document_ai_operation_name);
-
-//  // Batch still running
-//  if (!operationStatus.done) {
-//  return res.json({
-//  ...baseResponse,
-//  processing_progress: Math.min(file.processing_progress || 30, 50),
-//  current_operation: "Batch OCR processing in progress",
-//  message: "Document AI is processing your document. This may take several minutes.",
-//  });
-//  }
-
-//  // Batch failed
-//  if (operationStatus.error) {
-//  await DocumentModel.updateFileStatus(file_id, "error", 0.0);
-//  await ProcessingJobModel.updateJobStatus(job.job_id, "failed", operationStatus.error.message);
-//  return res.json({
-//  ...baseResponse,
-//  status: "error",
-//  processing_progress: 0,
-//  current_operation: "Batch processing failed",
-//  job_status: "failed",
-//  job_error: operationStatus.error.message,
-//  });
-//  }
-
-//  // Batch completed - now process the results
-//  await updateProcessingProgress(file_id, "processing", 55.0, "Batch OCR completed, processing results");
-
-//  const bucketName = process.env.GCS_OUTPUT_BUCKET_NAME;
-//  const prefix = job.gcs_output_uri_prefix.replace(`gs://${bucketName}/`, "");
-//  const extractedBatchTexts = await fetchBatchResults(bucketName, prefix);
- 
-//  await updateProcessingProgress(file_id, "processing", 60.0, "Chunking batch results");
-
-//  // Fetch chunking method
-//  let batchChunkingMethod = "recursive";
-//  try {
-//  const chunkMethodQuery = `
-//  SELECT chunking_method
-//  FROM processing_jobs pj
-//  LEFT JOIN secret_manager sm ON pj.secret_id = sm.id
-//  WHERE pj.file_id = $1
-//  ORDER BY pj.created_at DESC
-//  LIMIT 1;
-//  `;
-//  const result = await db.query(chunkMethodQuery, [file_id]);
-//  if (result.rows.length > 0 && result.rows[0].chunking_method) {
-//  batchChunkingMethod = result.rows[0].chunking_method;
-//  }
-//  } catch (err) {
-//  console.error(`Error fetching chunking method: ${err.message}`);
-//  }
-
-//  await updateProcessingProgress(file_id, "processing", 65.0, `Chunking with ${batchChunkingMethod} method`);
-//  const chunks = await chunkDocument(extractedBatchTexts, file_id, batchChunkingMethod);
-
-//  await updateProcessingProgress(file_id, "processing", 70.0, "Generating embeddings");
-//  const chunkContents = chunks.map(c => c.content);
-//  const embeddings = await generateEmbeddings(chunkContents);
-
-//  await updateProcessingProgress(file_id, "processing", 80.0, "Saving chunks and embeddings");
-//  const chunksToSave = chunks.map((chunk, i) => ({
-//  file_id,
-//  chunk_index: i,
-//  content: chunk.content,
-//  token_count: chunk.token_count,
-//  page_start: chunk.metadata.page_start,
-//  page_end: chunk.metadata.page_end,
-//  heading: chunk.metadata.heading,
-//  }));
-
-//  await FileChunkModel.saveMultipleChunks(chunksToSave);
-//  const savedChunks = await FileChunkModel.getChunksByFileId(file_id);
- 
-//  const vectors = savedChunks.map((chunk, i) => ({
-//  chunk_id: chunk.id,
-//  embedding: embeddings[i],
-//  file_id,
-//  }));
-
-//  await ChunkVectorModel.saveMultipleChunkVectors(vectors);
-
-//  await updateProcessingProgress(file_id, "processing", 90.0, "Generating summary");
-//  const fullText = chunks.map(c => c.content).join("\n\n");
-//  try {
-//  const summary = await getSummaryFromChunks(fullText);
-//  await DocumentModel.updateFileSummary(file_id, summary);
-//  } catch (err) {
-//  console.warn(`Summary generation failed: ${err.message}`);
-//  }
-
-//  await DocumentModel.updateFileProcessedAt(file_id);
-//  await updateProcessingProgress(file_id, "processed", 100.0, "Processing completed");
-//  await ProcessingJobModel.updateJobStatus(job.job_id, "completed");
-
-//  const updatedFile = await DocumentModel.getFileById(file_id);
-//  const finalChunks = await FileChunkModel.getChunksByFileId(file_id);
-
-//  return res.json({
-//  document_id: updatedFile.id,
-//  filename: updatedFile.filename,
-//  status: "processed",
-//  processing_progress: 100,
-//  current_operation: "Completed",
-//  job_status: "completed",
-//  chunks: finalChunks,
-//  chunk_count: finalChunks.length,
-//  summary: updatedFile.summary,
-//  chunking_method: batchChunkingMethod,
-//  processed_at: updatedFile.processed_at,
-//  });
-//  }
-
-//  // Case 5: Just uploaded, not yet started
-//  return res.json({
-//  ...baseResponse,
-//  current_operation: "Queued",
-//  message: "Document uploaded successfully. Processing will begin shortly.",
-//  });
-
-//  } catch (error) {
-//  console.error("❌ getDocumentProcessingStatus error:", error);
-//  return res.status(500).json({
-//  error: "Failed to fetch processing status.",
-//  details: error.message,
-//  });
-//  }
-// };
-
-
-
-
-// exports.getDocumentProcessingStatus = async (req, res) => {
-//  try {
-//  const { file_id } = req.params;
-//  if (!file_id) {
-//  return res.status(400).json({ error: "file_id is required." });
-//  }
-
-//  console.log(
-//  `[getDocumentProcessingStatus] Checking status for file_id: ${file_id}`
-//  );
-
-//  const file = await DocumentModel.getFileById(file_id);
-//  if (!file || String(file.user_id) !== String(req.user.id)) {
-//  return res
-//  .status(403)
-//  .json({ error: "Access denied or file not found." });
-//  }
-
-//  const job = await ProcessingJobModel.getJobByFileId(file_id);
-
-//  // Prepare base response
-//  const baseResponse = {
-//  document_id: file.id,
-//  filename: file.filename,
-//  status: file.status,
-//  processing_progress: parseFloat(file.processing_progress) || 0,
-//  current_operation: file.current_operation || "Pending",
-//  job_status: job ? job.status : "unknown",
-//  job_error: job ? job.error_message : null,
-//  last_updated: file.updated_at,
-//  file_size: file.file_size,
-//  mime_type: file.mime_type,
-//  };
-
-//  // Case 1: Document is fully processed
-//  if (file.status === "processed") {
-//  const chunks = await FileChunkModel.getChunksByFileId(file_id);
-//  return res.json({
-//  ...baseResponse,
-//  processing_progress: 100,
-//  current_operation: "Completed",
-//  chunks: chunks,
-//  chunk_count: chunks.length,
-//  summary: file.summary,
-//  processed_at: file.processed_at,
-//  });
-//  }
-
-//  // Case 2: Document processing failed
-//  if (file.status === "error") {
-//  return res.json({
-//  ...baseResponse,
-//  processing_progress: 0,
-//  current_operation: "Failed",
-//  error_details: job ? job.error_message : "Unknown error occurred",
-//  });
-//  }
-
-//  // Case 3: Synchronous processing in progress
-//  if (file.status === "processing") {
-//  return res.json({
-//  ...baseResponse,
-//  message: "Document is being processed. Progress updates in real-time.",
-//  });
-//  }
-
-//  // Case 4: Batch processing
-//  if (file.status === "batch_processing" || file.status === "batch_queued") {
-//  if (!job || !job.document_ai_operation_name) {
-//  return res.json({
-//  ...baseResponse,
-//  current_operation: "Queued for batch processing",
-//  message: "Document is queued for batch processing.",
-//  });
-//  }
-
-//  console.log(
-//  `[getDocumentProcessingStatus] Checking Document AI batch operation: ${job.document_ai_operation_name}`
-//  );
-
-//  // Step 1: Check operation status (0-5%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "batch_processing",
-//  1.0,
-//  "Checking batch processing status"
-//  );
-
-//  const operationStatus = await getOperationStatus(
-//  job.document_ai_operation_name
-//  );
-
-//  // Batch still running
-//  if (!operationStatus.done) {
-//  // Progress from 5% to 50% while batch is processing
-//  const currentProgress = Math.min(parseFloat(file.processing_progress) || 5, 50);
-//  await updateProcessingProgress(
-//  file_id,
-//  "batch_processing",
-//  currentProgress,
-//  "Batch OCR processing in progress"
-//  );
-
-//  return res.json({
-//  ...baseResponse,
-//  processing_progress: currentProgress,
-//  current_operation: "Batch OCR processing in progress",
-//  message:
-//  "Document AI is processing your document. This may take several minutes.",
-//  });
-//  }
-
-//  // Batch failed
-//  if (operationStatus.error) {
-//  await updateProcessingProgress(
-//  file_id,
-//  "error",
-//  0.0,
-//  "Batch processing failed"
-//  );
-//  await ProcessingJobModel.updateJobStatus(
-//  job.job_id,
-//  "failed",
-//  operationStatus.error.message
-//  );
-//  return res.json({
-//  ...baseResponse,
-//  status: "error",
-//  processing_progress: 0,
-//  current_operation: "Batch processing failed",
-//  job_status: "failed",
-//  job_error: operationStatus.error.message,
-//  });
-//  }
-
-//  // Batch completed - now process the results step by step
-//  // Step 2: Batch OCR completed (50-52%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  50.0,
-//  "Batch OCR completed"
-//  );
-
-//  // Step 3: Preparing to fetch results (52-54%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  52.0,
-//  "Preparing to fetch batch results"
-//  );
-
-//  // Step 4: Fetching batch results (54-58%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  54.0,
-//  "Fetching batch results from storage"
-//  );
-
-//  const bucketName = process.env.GCS_OUTPUT_BUCKET_NAME;
-//  const prefix = job.gcs_output_uri_prefix.replace(
-//  `gs://${bucketName}/`,
-//  ""
-//  );
-//  const extractedBatchTexts = await fetchBatchResults(bucketName, prefix);
-
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  58.0,
-//  "Batch results fetched successfully"
-//  );
-
-//  // Step 5: Fetch chunking method (58-60%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  59.0,
-//  "Fetching chunking configuration"
-//  );
-
-//  let batchChunkingMethod = "recursive";
-//  try {
-//  const chunkMethodQuery = `
-//  SELECT chunking_method
-//  FROM processing_jobs pj
-//  LEFT JOIN secret_manager sm ON pj.secret_id = sm.id
-//  WHERE pj.file_id = $1
-//  ORDER BY pj.created_at DESC
-//  LIMIT 1;
-//  `;
-//  const result = await db.query(chunkMethodQuery, [file_id]);
-//  if (result.rows.length > 0 && result.rows[0].chunking_method) {
-//  batchChunkingMethod = result.rows[0].chunking_method;
-//  }
-//  } catch (err) {
-//  console.error(`Error fetching chunking method: ${err.message}`);
-//  }
-
-//  // Step 6: Starting chunking (60-62%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  60.0,
-//  `Starting chunking with ${batchChunkingMethod} method`
-//  );
-
-//  // Step 7: Chunking document (62-68%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  62.0,
-//  `Analyzing document structure for chunking`
-//  );
-
-//  const chunks = await chunkDocument(
-//  extractedBatchTexts,
-//  file_id,
-//  batchChunkingMethod
-//  );
-
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  68.0,
-//  `Created ${chunks.length} chunks successfully`
-//  );
-
-//  // Step 8: Preparing embeddings (68-70%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  69.0,
-//  "Preparing to generate embeddings"
-//  );
-
-//  const chunkContents = chunks.map((c) => c.content);
-
-//  // Step 9: Generating embeddings (70-78%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  70.0,
-//  `Generating embeddings for ${chunks.length} chunks`
-//  );
-
-//  const embeddings = await generateEmbeddings(chunkContents);
-
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  78.0,
-//  "Embeddings generated successfully"
-//  );
-
-//  // Step 10: Preparing to save chunks (78-80%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  79.0,
-//  "Preparing chunks for database storage"
-//  );
-
-//  const chunksToSave = chunks.map((chunk, i) => ({
-//  file_id,
-//  chunk_index: i,
-//  content: chunk.content,
-//  token_count: chunk.token_count,
-//  page_start: chunk.metadata.page_start,
-//  page_end: chunk.metadata.page_end,
-//  heading: chunk.metadata.heading,
-//  }));
-
-//  // Step 11: Saving chunks (80-84%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  80.0,
-//  "Saving chunks to database"
-//  );
-
-//  const savedChunks = await FileChunkModel.saveMultipleChunks(chunksToSave);
-
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  84.0,
-//  `Saved ${savedChunks.length} chunks to database`
-//  );
-
-//  // Step 12: Preparing vectors (84-85%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  85.0,
-//  "Preparing vector embeddings for storage"
-//  );
-
-//  const vectors = savedChunks.map((chunk, i) => ({
-//  chunk_id: chunk.id,
-//  embedding: embeddings[i],
-//  file_id,
-//  }));
-
-//  // Step 13: Saving vectors (85-88%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  86.0,
-//  "Saving vector embeddings to database"
-//  );
-
-//  await ChunkVectorModel.saveMultipleChunkVectors(vectors);
-
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  88.0,
-//  "Vector embeddings saved successfully"
-//  );
-
-//  // Step 14: Preparing summary (88-90%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  89.0,
-//  "Preparing to generate document summary"
-//  );
-
-//  const fullText = chunks.map((c) => c.content).join("\n\n");
-
-//  // Step 15: Generating summary (90-95%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  90.0,
-//  "Generating AI-powered document summary"
-//  );
-
-//  try {
-//  const summary = await getSummaryFromChunks(fullText);
-//  await DocumentModel.updateFileSummary(file_id, summary);
-
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  95.0,
-//  "Summary generated successfully"
-//  );
-//  } catch (err) {
-//  console.warn(`Summary generation failed: ${err.message}`);
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  95.0,
-//  "Summary generation skipped (non-critical)"
-//  );
-//  }
-
-//  // Step 16: Finalizing (95-98%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  96.0,
-//  "Updating document metadata"
-//  );
-
-//  await DocumentModel.updateFileProcessedAt(file_id);
-
-//  await updateProcessingProgress(
-//  file_id,
-//  "processing",
-//  98.0,
-//  "Finalizing processing"
-//  );
-
-//  // Step 17: Completing (98-100%)
-//  await updateProcessingProgress(
-//  file_id,
-//  "processed",
-//  100.0,
-//  "Processing completed successfully"
-//  );
-
-//  await ProcessingJobModel.updateJobStatus(job.job_id, "completed");
-
-//  // Fetch final data
-//  const updatedFile = await DocumentModel.getFileById(file_id);
-//  const finalChunks = await FileChunkModel.getChunksByFileId(file_id);
-
-//  return res.json({
-//  document_id: updatedFile.id,
-//  filename: updatedFile.filename,
-//  status: "processed",
-//  processing_progress: 100,
-//  current_operation: "Completed",
-//  job_status: "completed",
-//  chunks: finalChunks,
-//  chunk_count: finalChunks.length,
-//  summary: updatedFile.summary,
-//  chunking_method: batchChunkingMethod,
-//  processed_at: updatedFile.processed_at,
-//  });
-//  }
-
-//  // Case 5: Just uploaded, not yet started
-//  return res.json({
-//  ...baseResponse,
-//  current_operation: "Queued",
-//  message: "Document uploaded successfully. Processing will begin shortly.",
-//  });
-//  } catch (error) {
-//  console.error("❌ getDocumentProcessingStatus error:", error);
-//  return res.status(500).json({
-//  error: "Failed to fetch processing status.",
-//  details: error.message,
-//  });
-//  }
-// };
-// Don't forget to update your DocumentModel to support current_operation field
-// Add this migration:
-/*
-ALTER TABLE files ADD COLUMN IF NOT EXISTS current_operation TEXT DEFAULT 'Pending';
-
--- Update the updateFileStatus method in DocumentModel to also update current_operation:
-exports.updateCurrentOperation = async (fileId, operation) => {
- const query = `
- UPDATE files
- SET current_operation = $1, updated_at = NOW()
- WHERE id = $2
- `;
- await db.query(query, [operation, fileId]);
-};
-*/
-
-// exports.getDocumentProcessingStatus = async (req, res) => {
-//   try {
-//     const { file_id } = req.params;
-//     if (!file_id) {
-//       return res.status(400).json({ error: "file_id is required." });
-//     }
-
-//     console.log(
-//       `[getDocumentProcessingStatus] Checking status for file_id: ${file_id}`
-//     );
-
-//     const file = await DocumentModel.getFileById(file_id);
-//     if (!file || String(file.user_id) !== String(req.user.id)) {
-//       return res
-//         .status(403)
-//         .json({ error: "Access denied or file not found." });
-//     }
-
-//     const job = await ProcessingJobModel.getJobByFileId(file_id);
-
-//     // Prepare base response
-//     const baseResponse = {
-//       document_id: file.id,
-//       filename: file.filename,
-//       status: file.status,
-//       processing_progress: parseFloat(file.processing_progress) || 0,
-//       current_operation: file.current_operation || "Pending",
-//       job_status: job ? job.status : "unknown",
-//       job_error: job ? job.error_message : null,
-//       last_updated: file.updated_at,
-//       file_size: file.file_size,
-//       mime_type: file.mime_type,
-//     };
-
-//     // Case 1: Document is fully processed
-//     if (file.status === "processed") {
-//       const chunks = await FileChunkModel.getChunksByFileId(file_id);
-//       return res.json({
-//         ...baseResponse,
-//         processing_progress: 100,
-//         current_operation: "Completed",
-//         chunks: chunks,
-//         chunk_count: chunks.length,
-//         summary: file.summary,
-//         processed_at: file.processed_at,
-//       });
-//     }
-
-//     // Case 2: Document processing failed
-//     if (file.status === "error") {
-//       return res.json({
-//         ...baseResponse,
-//         processing_progress: 0,
-//         current_operation: "Failed",
-//         error_details: job ? job.error_message : "Unknown error occurred",
-//       });
-//     }
-
-//     // Case 3: Synchronous processing in progress
-//     if (file.status === "processing") {
-//       return res.json({
-//         ...baseResponse,
-//         message: "Document is being processed. Progress updates in real-time.",
-//       });
-//     }
-
-//     // Case 4: Batch processing
-//     if (file.status === "batch_processing" || file.status === "batch_queued") {
-//       if (!job || !job.document_ai_operation_name) {
-//         return res.json({
-//           ...baseResponse,
-//           current_operation: "Queued for batch processing",
-//           message: "Document is queued for batch processing.",
-//         });
-//       }
-
-//       console.log(
-//         `[getDocumentProcessingStatus] Checking Document AI batch operation: ${job.document_ai_operation_name}`
-//       );
-
-//       // Get current progress to avoid going backwards
-//       const currentProgress = parseFloat(file.processing_progress) || 0;
-
-//       // Only update if we're moving forward from the initial state
-//       if (currentProgress < 5) {
-//         await updateProcessingProgress(
-//           file_id,
-//           "batch_processing",
-//           5.0,
-//           "Checking batch processing status"
-//         );
-//       }
-
-//       const operationStatus = await getOperationStatus(
-//         job.document_ai_operation_name
-//       );
-
-//       // Batch still running
-//       if (!operationStatus.done) {
-//         // REFACTORED: Progress from 5% to 42% while batch is processing
-//         // This aligns with the synchronous "OCR processing" step (18-42%)
-//         const newProgress = Math.min(currentProgress + 2, 42);
-
-//         if (newProgress > currentProgress) {
-//           await updateProcessingProgress(
-//             file_id,
-//             "batch_processing",
-//             newProgress,
-//             "Batch OCR processing in progress"
-//           );
-//         }
-
-//         return res.json({
-//           ...baseResponse,
-//           processing_progress: newProgress,
-//           current_operation: "Batch OCR processing in progress",
-//           message:
-//             "Document AI is processing your document. This may take several minutes.",
-//         });
-//       }
-
-//       // Batch failed
-//       if (operationStatus.error) {
-//         await updateProcessingProgress(
-//           file_id,
-//           "error",
-//           0.0,
-//           "Batch processing failed"
-//         );
-//         await ProcessingJobModel.updateJobStatus(
-//           job.job_id,
-//           "failed",
-//           operationStatus.error.message
-//         );
-//         return res.json({
-//           ...baseResponse,
-//           status: "error",
-//           processing_progress: 0,
-//           current_operation: "Batch processing failed",
-//           job_status: "failed",
-//           job_error: operationStatus.error.message,
-//         });
-//       }
-
-//       // Batch completed - now process the results step by step
-//       // Only proceed if we haven't already processed this (check current progress)
-//       if (currentProgress >= 42 && currentProgress < 100) {
-//         // We're already in the middle of post-processing, just return current status
-//         return res.json({
-//           ...baseResponse,
-//           message: "Processing document content and generating embeddings.",
-//         });
-//       }
-
-//       // REFACTORED: Start all post-processing steps from 42%
-//       // All percentages and messages are now aligned with processDocument()
-
-//       // Step 6 (End): Batch OCR completed (42%)
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         42.0,
-//         "Batch OCR completed"
-//       );
-
-//       // Step 7: Validate extracted text (42-45%)
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         43.0,
-//         "Validating extracted text"
-//       );
-
-//       const bucketName = process.env.GCS_OUTPUT_BUCKET_NAME;
-//       const prefix = job.gcs_output_uri_prefix.replace(
-//         `gs://${bucketName}/`,
-//         ""
-//       );
-//       const extractedBatchTexts = await fetchBatchResults(bucketName, prefix);
-
-//       if (
-//         !extractedBatchTexts.length ||
-//         extractedBatchTexts.every((item) => !item.text || item.text.trim() === "")
-//       ) {
-//         // Handle failure
-//         throw new Error("No meaningful text extracted from batch document.");
-//       }
-
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         45.0,
-//         "Text validation completed"
-//       );
-
-//       // Step 8: Prepare for chunking (45-48%)
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         46.0,
-//         "Fetching chunking configuration"
-//       );
-
-//       let batchChunkingMethod = "recursive";
-//       try {
-//         const chunkMethodQuery = `
-//           SELECT chunking_method
-//           FROM processing_jobs pj
-//           LEFT JOIN secret_manager sm ON pj.secret_id = sm.id
-//           WHERE pj.file_id = $1
-//           ORDER BY pj.created_at DESC
-//           LIMIT 1;
-//         `;
-//         const result = await db.query(chunkMethodQuery, [file_id]);
-//         if (result.rows.length > 0 && result.rows[0].chunking_method) {
-//           batchChunkingMethod = result.rows[0].chunking_method;
-//         }
-//       } catch (err) {
-//         console.error(`Error fetching chunking method: ${err.message}`);
-//       }
-
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         48.0,
-//         `Configuration loaded: ${batchChunkingMethod} chunking`
-//       );
-
-//       // Step 9: Chunking (48-58%)
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         50.0,
-//         `Chunking document with ${batchChunkingMethod} strategy`
-//       );
-
-//       const chunks = await chunkDocument(
-//         extractedBatchTexts,
-//         file_id,
-//         batchChunkingMethod
-//       );
-
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         58.0,
-//         `Chunking completed with ${chunks.length} segments`
-//       );
-
-//       if (!chunks.length) {
-//         // Handle no chunks (same as in processDocument)
-//         await DocumentModel.updateFileProcessedAt(file_id);
-//         await updateProcessingProgress(
-//           file_id,
-//           "processed",
-//           100.0,
-//           "Processing completed (no content to chunk)"
-//         );
-//         await ProcessingJobModel.updateJobStatus(job.job_id, "completed");
-//         return res.json({
-//            ...baseResponse,
-//            status: "processed",
-//            processing_progress: 100,
-//            current_operation: "Processing completed (no content to chunk)",
-//         });
-//       }
-
-//       // Step 10: Prepare embeddings (58-62%)
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         59.0,
-//         "Preparing chunks for embedding generation"
-//       );
-//       const chunkContents = chunks.map((c) => c.content);
-
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         62.0,
-//         `Ready to generate embeddings for ${chunks.length} chunks`
-//       );
-
-//       // Step 11: Generate Embeddings (62-76%)
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         64.0,
-//         "Connecting to embedding service"
-//       );
-
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         66.0,
-//         `Processing embeddings for ${chunks.length} chunks`
-//       );
-//       const embeddings = await generateEmbeddings(chunkContents);
-
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         76.0,
-//         "All embeddings generated successfully"
-//       );
-
-//       // Step 12: Prepare database save (76-78%)
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         77.0,
-//         "Preparing data for database storage"
-//       );
-//       const chunksToSave = chunks.map((chunk, i) => ({
-//         file_id,
-//         chunk_index: i,
-//         content: chunk.content,
-//         token_count: chunk.token_count,
-//         page_start: chunk.metadata.page_start,
-//         page_end: chunk.metadata.page_end,
-//         heading: chunk.metadata.heading,
-//       }));
-
-//       // Step 13: Save chunks to database (78-82%)
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         79.0,
-//         "Saving chunks to database"
-//       );
-//       const savedChunks = await FileChunkModel.saveMultipleChunks(chunksToSave);
-
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         82.0,
-//         `${savedChunks.length} chunks saved successfully`
-//       );
-
-//       // Step 14: Prepare vectors (82-84%)
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         83.0,
-//         "Preparing vector embeddings for storage"
-//       );
-//       const vectors = savedChunks.map((chunk, i) => ({
-//         chunk_id: chunk.id,
-//         embedding: embeddings[i],
-//         file_id,
-//       }));
-
-//       // Step 15: Save vectors (84-88%)
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         85.0,
-//         "Storing vector embeddings in database"
-//       );
-//       await ChunkVectorModel.saveMultipleChunkVectors(vectors);
-
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         88.0,
-//         "Vector embeddings stored successfully"
-//       );
-
-//       // Step 16: Prepare for summary (88-90%)
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         89.0,
-//         "Preparing document content for summarization"
-//       );
-//       const fullText = chunks.map((c) => c.content).join("\n\n");
-
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         90.0,
-//         "Ready to generate summary"
-//       );
-
-//       // Step 17: Generate Summary (90-95%)
-//       try {
-//         if (fullText.trim()) {
-//           await updateProcessingProgress(
-//             file_id,
-//             "processing",
-//             92.0,
-//             "Generating AI-powered document summary"
-//           );
-//           const summary = await getSummaryFromChunks(fullText);
-//           await DocumentModel.updateFileSummary(file_id, summary);
-//           await updateProcessingProgress(
-//             file_id,
-//             "processing",
-//             95.0,
-//             "Summary generated and saved successfully"
-//           );
-//         }
-//       } catch (err) {
-//         console.warn(`Summary generation failed: ${err.message}`);
-//         await updateProcessingProgress(
-//           file_id,
-//           "processing",
-//           95.0,
-//           "Summary generation skipped (non-critical)"
-//         );
-//       }
-
-//       // Step 18: Finalization (95-100%)
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         96.0,
-//         "Updating document metadata"
-//       );
-//       await DocumentModel.updateFileProcessedAt(file_id);
-
-//       await updateProcessingProgress(
-//         file_id,
-//         "processing",
-//         98.0,
-//         "Finalizing document processing"
-//       );
-
-//       await updateProcessingProgress(
-//         file_id,
-//         "processed",
-//         100.0,
-//         "Document processing completed successfully"
-//       );
-//       await ProcessingJobModel.updateJobStatus(job.job_id, "completed");
-
-//       // Fetch final data
-//       const updatedFile = await DocumentModel.getFileById(file_id);
-//       const finalChunks = await FileChunkModel.getChunksByFileId(file_id);
-
-//       return res.json({
-//         document_id: updatedFile.id,
-//         filename: updatedFile.filename,
-//         status: "processed",
-//         processing_progress: 100,
-//         current_operation: "Completed",
-//         job_status: "completed",
-//         chunks: finalChunks,
-//         chunk_count: finalChunks.length,
-//         summary: updatedFile.summary,
-//         chunking_method: batchChunkingMethod,
-//         processed_at: updatedFile.processed_at,
-//       });
-//     }
-
-//     // Case 5: Just uploaded, not yet started
-//     return res.json({
-//       ...baseResponse,
-//       current_operation: "Queued",
-//       message: "Document uploaded successfully. Processing will begin shortly.",
-//     });
-//   } catch (error) {
-//     console.error("❌ getDocumentProcessingStatus error:", error);
-//     // Try to update file status to error if we're in the middle of processing
-//     try {
-//         const { file_id } = req.params;
-//         if (file_id) {
-//              await updateProcessingProgress(
-//                 file_id,
-//                 "error",
-//                 0.0,
-//                 `Post-processing failed: ${error.message}`
-//              );
-//              const job = await ProcessingJobModel.getJobByFileId(file_id);
-//              if (job) {
-//                 await ProcessingJobModel.updateJobStatus(job.job_id, "failed", error.message);
-//              }
-//         }
-//     } catch (updateError) {
-//         console.error("❌ Failed to update error status:", updateError);
-//     }
-   
-//     return res.status(500).json({
-//       error: "Failed to fetch processing status.",
-//       details: error.message,
-//     });
-//   }
-// };
 
 async function processBatchResults(file_id, job) {
   try {
