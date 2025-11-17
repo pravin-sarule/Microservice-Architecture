@@ -3500,5 +3500,231 @@ exports.getUserUsageAndPlan = async (req, res) => {
 
 
 
+/**
+ * @description Delete a single chat by ID
+ * @route DELETE /api/doc/chat/:chat_id
+ */
+exports.deleteChat = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { chat_id } = req.params;
+
+    if (!chat_id) {
+      return res.status(400).json({ error: "chat_id is required." });
+    }
+
+    const deleted = await FileChat.deleteChatById(chat_id, userId);
+
+    if (!deleted) {
+      return res.status(404).json({ error: "Chat not found or access denied." });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Chat deleted successfully.",
+      deleted_chat_id: chat_id
+    });
+
+  } catch (error) {
+    console.error("❌ deleteChat error:", error);
+    return res.status(500).json({ error: "Failed to delete chat." });
+  }
+};
+
+/**
+ * @description Delete multiple selected chats
+ * @route DELETE /api/doc/chats/selected
+ */
+exports.deleteSelectedChats = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { chat_ids } = req.body;
+
+    if (!Array.isArray(chat_ids) || chat_ids.length === 0) {
+      return res.status(400).json({ error: "chat_ids array is required and cannot be empty." });
+    }
+
+    if (chat_ids.length > 100) {
+      return res.status(400).json({ error: "Cannot delete more than 100 chats at once." });
+    }
+
+    const result = await FileChat.deleteSelectedChats(chat_ids, userId);
+
+    return res.status(200).json({
+      success: true,
+      message: `${result.deletedCount} chat(s) deleted successfully.`,
+      requested_count: chat_ids.length,
+      deleted_count: result.deletedCount,
+      deleted_ids: result.deletedIds
+    });
+
+  } catch (error) {
+    console.error("❌ deleteSelectedChats error:", error);
+    return res.status(500).json({ error: "Failed to delete selected chats." });
+  }
+};
+
+/**
+ * @description Delete all chats for the authenticated user
+ * @route DELETE /api/doc/chats/all
+ */
+exports.deleteAllChats = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // Get statistics first for confirmation message
+    const stats = await FileChat.getChatStatistics(userId);
+    
+    if (stats && stats.totalChats === 0) {
+      return res.status(404).json({ 
+        success: true,
+        message: "No chats found to delete.",
+        deleted_count: 0
+      });
+    }
+
+    const result = await FileChat.deleteAllChatsByUserId(userId);
+
+    return res.status(200).json({
+      success: true,
+      message: `All chats deleted successfully. ${result.deletedCount} chat(s) were removed.`,
+      deleted_count: result.deletedCount,
+      sessions_affected: stats ? stats.totalSessions : 0
+    });
+
+  } catch (error) {
+    console.error("❌ deleteAllChats error:", error);
+    return res.status(500).json({ error: "Failed to delete all chats." });
+  }
+};
+
+/**
+ * @description Delete all chats for a specific session
+ * @route DELETE /api/doc/chats/session/:session_id
+ */
+exports.deleteChatsBySession = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { session_id } = req.params;
+
+    if (!session_id) {
+      return res.status(400).json({ error: "session_id is required." });
+    }
+
+    const result = await FileChat.deleteChatsBySession(session_id, userId);
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ 
+        error: "No chats found in this session or access denied.",
+        session_id: session_id
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Session chats deleted successfully. ${result.deletedCount} chat(s) were removed.`,
+      deleted_count: result.deletedCount,
+      session_id: session_id
+    });
+
+  } catch (error) {
+    console.error("❌ deleteChatsBySession error:", error);
+    return res.status(500).json({ error: "Failed to delete session chats." });
+  }
+};
+
+/**
+ * @description Delete all chats for a specific file
+ * @route DELETE /api/doc/chats/file/:file_id
+ */
+exports.deleteChatsByFile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { file_id } = req.params;
+
+    if (!file_id) {
+      return res.status(400).json({ error: "file_id is required." });
+    }
+
+    // Verify user owns the file (optional check)
+    const DocumentModel = require("../models/documentModel");
+    const file = await DocumentModel.getFileById(file_id);
+    if (file && String(file.user_id) !== String(userId)) {
+      return res.status(403).json({ error: "Access denied to this file." });
+    }
+
+    const result = await FileChat.deleteChatsByFileId(file_id, userId);
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ 
+        success: true,
+        message: "No chats found for this file.",
+        deleted_count: 0,
+        file_id: file_id
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `File chats deleted successfully. ${result.deletedCount} chat(s) were removed.`,
+      deleted_count: result.deletedCount,
+      file_id: file_id
+    });
+
+  } catch (error) {
+    console.error("❌ deleteChatsByFile error:", error);
+    return res.status(500).json({ error: "Failed to delete file chats." });
+  }
+};
+
+/**
+ * @description Get chat statistics for the user
+ * @route GET /api/doc/chats/statistics
+ */
+exports.getChatStatistics = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const stats = await FileChat.getChatStatistics(userId);
+
+    return res.status(200).json({
+      success: true,
+      statistics: stats
+    });
+
+  } catch (error) {
+    console.error("❌ getChatStatistics error:", error);
+    return res.status(500).json({ error: "Failed to get chat statistics." });
+  }
+};
+
+/**
+ * @description Get preview of chats that would be deleted
+ * @route POST /api/doc/chats/delete-preview
+ */
+exports.getDeletePreview = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const filters = req.body;
+
+    const preview = await FileChat.getDeletePreview(userId, filters);
+
+    return res.status(200).json({
+      success: true,
+      preview,
+      count: preview.length,
+      message: preview.length > 0 ? `${preview.length} chat(s) would be deleted` : "No chats match the criteria"
+    });
+
+  } catch (error) {
+    console.error("❌ getDeletePreview error:", error);
+    return res.status(500).json({ error: "Failed to get delete preview." });
+  }
+};
+
+
+
 // Export processDocument for use in other modules (e.g., documentRoutes)
 exports.processDocument = processDocument;
+
+

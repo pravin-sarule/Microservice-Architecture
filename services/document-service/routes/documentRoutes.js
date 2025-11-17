@@ -116,4 +116,56 @@ router.get(
     controller.getUserUsageAndPlan
 );
 
+
+
+// Get chat statistics (useful for showing user their data before deletion)
+router.get(
+  '/chats/statistics',
+  protect,
+  controller.getChatStatistics
+);
+
+// Get preview of chats to be deleted (for confirmation dialogs)
+router.post(
+  '/chats/delete-preview',
+  protect,
+  controller.getDeletePreview
+);
+
+// Delete a single chat
+router.delete(
+  '/chat/:chat_id',
+  protect,
+  controller.deleteChat
+);
+
+// Delete multiple selected chats
+router.delete(
+  '/chats/selected',
+  protect,
+  controller.deleteSelectedChats
+);
+
+// Delete all chats for user
+router.delete(
+  '/chats/all',
+  protect,
+  controller.deleteAllChats
+);
+
+// Delete all chats for a specific session
+router.delete(
+  '/chats/session/:session_id',
+  protect,
+  controller.deleteChatsBySession
+);
+
+// Delete all chats for a specific file
+router.delete(
+  '/chats/file/:file_id',
+  protect,
+  controller.deleteChatsByFile
+);
+
+
 module.exports = router;
