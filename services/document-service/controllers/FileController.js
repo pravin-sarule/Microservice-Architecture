@@ -116,6 +116,128 @@ function appendFolderConversation(prompt, conversationText) {
   return `You are continuing a multi-turn chat for a folder-level analysis. Maintain context with earlier exchanges.\n\nPrevious Conversation:\n${conversationText}\n\n---\n\n${prompt}`;
 }
 
+// Helper function to fetch and format case data based on folderName
+async function fetchCaseDataForFolder(userId, folderName) {
+  try {
+    // First, find the folder by folder_path or originalname
+    // folderName could be just the folder name or part of the full path
+    const folderQuery = `
+      SELECT id, originalname, folder_path
+      FROM user_files
+      WHERE user_id = $1
+        AND is_folder = true
+        AND (
+          folder_path = $2 
+          OR folder_path LIKE $3
+          OR folder_path LIKE $4
+          OR originalname = $2
+        )
+      ORDER BY created_at ASC
+      LIMIT 1;
+    `;
+    const folderPattern = `%${folderName}%`;
+    const folderEndPattern = `%/${folderName}`;
+    const { rows: folderRows } = await pool.query(folderQuery, [
+      userId, 
+      folderName, 
+      folderPattern, 
+      folderEndPattern
+    ]);
+    
+    if (folderRows.length === 0) {
+      console.log(`[fetchCaseDataForFolder] No folder found for folderName: ${folderName}`);
+      return null;
+    }
+
+    const folder = folderRows[0];
+    
+    // Then, find the case by folder_id
+    const caseQuery = `
+      SELECT *
+      FROM cases
+      WHERE user_id = $1
+        AND folder_id = $2
+      ORDER BY created_at DESC
+      LIMIT 1;
+    `;
+    const { rows: caseRows } = await pool.query(caseQuery, [userId, folder.id]);
+    
+    if (caseRows.length === 0) {
+      console.log(`[fetchCaseDataForFolder] No case found for folder_id: ${folder.id}`);
+      return null;
+    }
+
+    return caseRows[0];
+  } catch (error) {
+    console.error(`[fetchCaseDataForFolder] Error fetching case data:`, error);
+    return null;
+  }
+}
+
+// Helper function to format case data as context string
+function formatCaseDataAsContext(caseData) {
+  if (!caseData) return '';
+  
+  const formatJsonField = (field) => {
+    if (!field) return 'N/A';
+    if (typeof field === 'string') {
+      try {
+        const parsed = JSON.parse(field);
+        return Array.isArray(parsed) ? parsed.map(item => {
+          if (typeof item === 'object') {
+            return Object.entries(item).map(([key, val]) => `${key}: ${val || 'N/A'}`).join(', ');
+          }
+          return item;
+        }).join('; ') : JSON.stringify(parsed);
+      } catch {
+        return field;
+      }
+    }
+    if (Array.isArray(field)) {
+      return field.map(item => {
+        if (typeof item === 'object') {
+          return Object.entries(item).map(([key, val]) => `${key}: ${val || 'N/A'}`).join(', ');
+        }
+        return item;
+      }).join('; ');
+    }
+    return String(field);
+  };
+
+  const formatDate = (date) => {
+    if (!date) return 'N/A';
+    return new Date(date).toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric' 
+    });
+  };
+
+  return `=== CASE INFORMATION ===
+Case Title: ${caseData.case_title || 'N/A'}
+Case Number: ${caseData.case_number || 'N/A'}
+Filing Date: ${formatDate(caseData.filing_date)}
+Case Type: ${caseData.case_type || 'N/A'}
+Sub Type: ${caseData.sub_type || 'N/A'}
+Court Name: ${caseData.court_name || 'N/A'}
+Court Level: ${caseData.court_level || 'N/A'}
+Bench Division: ${caseData.bench_division || 'N/A'}
+Jurisdiction: ${caseData.jurisdiction || 'N/A'}
+State: ${caseData.state || 'N/A'}
+Judges: ${formatJsonField(caseData.judges)}
+Court Room No: ${caseData.court_room_no || 'N/A'}
+Petitioners: ${formatJsonField(caseData.petitioners)}
+Respondents: ${formatJsonField(caseData.respondents)}
+Category Type: ${caseData.category_type || 'N/A'}
+Primary Category: ${caseData.primary_category || 'N/A'}
+Sub Category: ${caseData.sub_category || 'N/A'}
+Complexity: ${caseData.complexity || 'N/A'}
+Monetary Value: ${caseData.monetary_value ? `₹${caseData.monetary_value}` : 'N/A'}
+Priority Level: ${caseData.priority_level || 'N/A'}
+Status: ${caseData.status || 'N/A'}
+---`;
+}
+
 
 // Progress stage definitions
 const PROGRESS_STAGES = {
@@ -2838,14 +2960,27 @@ exports.queryFolderDocuments = async (req, res) => {
 
     console.log(`📄 Found ${files.length} processed files in folder "${folderName}"`);
 
+    // 2.5️⃣ Fetch case data once for this folder (if available)
+    const caseData = await fetchCaseDataForFolder(userId, folderName);
+    const caseContext = caseData ? formatCaseDataAsContext(caseData) : '';
+    if (caseData) {
+      console.log(`📋 Case data found for folder "${folderName}": ${caseData.case_title || 'N/A'}`);
+    } else {
+      console.log(`[queryFolderDocuments] No case data found for folder "${folderName}"`);
+    }
+
     let previousChats = [];
     if (hasExistingSession) {
       previousChats = await FolderChat.getFolderChatHistory(userId, folderName, finalSessionId);
     }
     const conversationContext = formatFolderConversationHistory(previousChats);
     const historyForStorage = simplifyFolderHistory(previousChats);
+    
+    // Get last question/answer explicitly for context
+    let lastQuestionAnswer = '';
     if (historyForStorage.length > 0) {
       const lastTurn = historyForStorage[historyForStorage.length - 1];
+      lastQuestionAnswer = `Last Question: ${lastTurn.question || ''}\nLast Answer: ${lastTurn.answer || ''}`;
       console.log(
         `[queryFolderDocuments] Using ${historyForStorage.length} prior turn(s) for context. Most recent: Q="${(lastTurn.question || '').slice(0, 120)}", A="${(lastTurn.answer || '').slice(0, 120)}"`
       );
@@ -3005,6 +3140,17 @@ exports.queryFolderDocuments = async (req, res) => {
 
       // ✅ Build minimal prompt
       let finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n`;
+      
+      // Include case data if available
+      if (caseContext) {
+        finalPrompt += `${caseContext}\n\n`;
+      }
+      
+      // Include last question/answer if available
+      if (lastQuestionAnswer) {
+        finalPrompt += `=== PREVIOUS CONTEXT ===\n${lastQuestionAnswer}\n\n`;
+      }
+      
       finalPrompt += `${secretValue}\n\n=== RELEVANT DOCUMENTS (FOLDER: "${folderName}") ===\n${combinedContext}`;
 
       if (additional_input?.trim()) {
@@ -3166,7 +3312,21 @@ exports.queryFolderDocuments = async (req, res) => {
 
       llmContext = combinedContext;
 
-      let finalPrompt = `${storedQuestion}\n\n=== RELEVANT DOCUMENTS (FOLDER: "${folderName}") ===\n${combinedContext}`;
+      // Build prompt with case data and last question/answer context
+      let finalPrompt = '';
+      
+      // Include case data if available
+      if (caseContext) {
+        finalPrompt += `${caseContext}\n\n`;
+      }
+      
+      // Include last question/answer if available
+      if (lastQuestionAnswer) {
+        finalPrompt += `=== PREVIOUS CONTEXT ===\n${lastQuestionAnswer}\n\n`;
+      }
+      
+      finalPrompt += `${storedQuestion}\n\n=== RELEVANT DOCUMENTS (FOLDER: "${folderName}") ===\n${combinedContext}`;
+      
       if (additional_input?.trim()) {
         finalPrompt += `\n\n=== ADDITIONAL USER INPUT ===\n${additional_input.trim().substring(0, 500)}`;
       }
