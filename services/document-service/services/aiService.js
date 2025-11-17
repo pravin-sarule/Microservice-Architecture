@@ -623,6 +623,7 @@ require('dotenv').config();
 const axios = require('axios');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const pool = require('../config/db');
+const SystemPrompt = require('../models/SystemPrompt');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -941,12 +942,44 @@ async function askLLM(providerName, userMessage, context = '', relevant_chunks =
 }
 
 // ---------------------------
+// Get System Prompt from Database
+// ---------------------------
+async function getSystemPrompt(context = '') {
+  try {
+    const dbSystemPrompt = await SystemPrompt.getLatestSystemPrompt();
+    
+    // Combine database system prompt with context if both exist
+    if (dbSystemPrompt && context) {
+      console.log('[SystemPrompt] 🔄 Using database system prompt + context for system instruction');
+      return `${dbSystemPrompt}\n\n${context}`;
+    }
+    
+    // Use database system prompt if available
+    if (dbSystemPrompt) {
+      console.log('[SystemPrompt] ✅ Using system prompt from database for system instruction');
+      return dbSystemPrompt;
+    }
+    
+    // Fallback to context or default
+    console.log('[SystemPrompt] ⚠️ No database prompt found, using fallback system instruction');
+    return context || 'You are a helpful legal AI assistant.';
+  } catch (err) {
+    console.error('[SystemPrompt] ❌ Error getting system prompt, using fallback:', err.message);
+    return context || 'You are a helpful legal AI assistant.';
+  }
+}
+
+// ---------------------------
 // Core API Caller
 // ---------------------------
 async function callSinglePrompt(provider, prompt, context = '') {
   const config = LLM_CONFIGS[provider];
   const isGemini = provider.startsWith('gemini');
   const isClaude = provider.startsWith('claude') || provider === 'anthropic';
+
+  // Get system prompt from database
+  const systemPrompt = await getSystemPrompt(context);
+  console.log(`[SystemPrompt] 📝 Applying system instruction for ${provider} (length: ${systemPrompt.length} chars)`);
 
   // ---- Gemini ----
   if (isGemini) {
@@ -955,9 +988,10 @@ async function callSinglePrompt(provider, prompt, context = '') {
       try {
         const maxOutputTokens = await getModelMaxTokens(provider, modelName);
         console.log(`[LLM Max Tokens] Gemini model ${modelName} using maxOutputTokens=${maxOutputTokens}`);
+        console.log(`[SystemPrompt] 🎯 Gemini ${modelName} using systemInstruction from database`);
         const model = genAI.getGenerativeModel(
-          context
-            ? { model: modelName, systemInstruction: context }
+          systemPrompt
+            ? { model: modelName, systemInstruction: systemPrompt }
             : { model: modelName }
         );
         const result = await model.generateContent(prompt, {
@@ -982,19 +1016,25 @@ async function callSinglePrompt(provider, prompt, context = '') {
   const messages = isClaude
     ? [{ role: 'user', content: prompt }]
     : [
-        { role: 'system', content: context || 'You are a helpful legal AI assistant.' },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: prompt },
       ];
 
   const resolvedModelName = config.model;
   const maxTokens = await getModelMaxTokens(provider, resolvedModelName);
 
+  if (isClaude) {
+    console.log(`[SystemPrompt] 🎯 Claude ${resolvedModelName} using system field from database`);
+  } else {
+    console.log(`[SystemPrompt] 🎯 ${provider} ${resolvedModelName} using system role in messages from database`);
+  }
+
   const payload = isClaude
     ? {
         model: config.model,
         max_tokens: maxTokens,
         messages,
-        system: context,
+        system: systemPrompt,
       }
     : {
         model: config.model,
