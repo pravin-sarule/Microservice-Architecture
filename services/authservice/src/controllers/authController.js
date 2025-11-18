@@ -400,6 +400,7 @@
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const Session = require('../models/Session');
+const UserProfessionalProfile = require('../models/UserProfessionalProfile');
 const { generateToken } = require('../utils/jwt');
 const { createAndSendOTP, verifyOTP } = require('../services/otpService');
 const admin = require('../config/firebase'); // Import Firebase Admin SDK
@@ -540,7 +541,17 @@ const verifyOtpAndLogin = async (req, res) => {
     await Session.create({ user_id: user.id, token });
     console.log(`[AuthController] ✅ Session created for user: ${email}`);
 
-    // 5. Return success response with token
+    // 5. Check/Create professional profile
+    let professionalProfile;
+    try {
+      professionalProfile = await UserProfessionalProfile.findOrCreate(user.id);
+      console.log(`[AuthController] ✅ Professional profile checked/created for user: ${email}`);
+    } catch (profileError) {
+      console.error('[AuthController] ⚠️ Error checking/creating professional profile:', profileError);
+      // Don't fail login if profile creation fails
+    }
+
+    // 6. Return success response with token
     res.status(200).json({
       success: true,
       message: 'Login successful',
@@ -552,6 +563,9 @@ const verifyOtpAndLogin = async (req, res) => {
         role: user.role,
         is_blocked: user.is_blocked,
       },
+      professionalProfile: professionalProfile ? {
+        is_profile_completed: professionalProfile.is_profile_completed
+      } : null,
     });
 
   } catch (error) {
@@ -643,7 +657,17 @@ const firebaseGoogleSignIn = async (req, res) => {
     await Session.create({ user_id: user.id, token: jwtToken });
     console.log(`[GoogleSignIn] ✅ Session created for: ${userEmail}`);
 
-    // 9. Return success response with token (user can proceed to dashboard immediately)
+    // 9. Check/Create professional profile
+    let professionalProfile;
+    try {
+      professionalProfile = await UserProfessionalProfile.findOrCreate(user.id);
+      console.log(`[GoogleSignIn] ✅ Professional profile checked/created for user: ${userEmail}`);
+    } catch (profileError) {
+      console.error('[GoogleSignIn] ⚠️ Error checking/creating professional profile:', profileError);
+      // Don't fail login if profile creation fails
+    }
+
+    // 10. Return success response with token (user can proceed to dashboard immediately)
     res.status(200).json({
       message: "Google Sign-In successful",
       token: jwtToken,  // ⚠️ CRITICAL: Token returned immediately (no OTP required)
@@ -655,6 +679,9 @@ const firebaseGoogleSignIn = async (req, res) => {
         is_blocked: user.is_blocked,
         profile_image: user.profile_image,
       },
+      professionalProfile: professionalProfile ? {
+        is_profile_completed: professionalProfile.is_profile_completed
+      } : null,
     });
   } catch (error) {
     console.error("[GoogleSignIn] ❌ Error during Google Sign-In:", error);
@@ -885,6 +912,98 @@ const getUserInfo = async (req, res) => {
   }
 };
 
+/**
+ * @description Gets or creates professional profile for the authenticated user.
+ * @route GET /api/auth/professional-profile
+ */
+const getProfessionalProfile = async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+    // Find or create profile (auto-creates if doesn't exist)
+    const profile = await UserProfessionalProfile.findOrCreate(userId);
+
+    res.status(200).json({
+      type: 'final',
+      message: 'Professional profile fetched successfully',
+      data: profile,
+    });
+  } catch (error) {
+    console.error('Error fetching professional profile:', error);
+    res.status(500).json({ 
+      type: 'status',
+      message: 'Internal server error' 
+    });
+  }
+};
+
+/**
+ * @description Updates professional profile for the authenticated user.
+ * @route PUT /api/auth/professional-profile
+ */
+const updateProfessionalProfile = async (req, res) => {
+  const userId = req.user.id;
+  const {
+    is_profile_completed,
+    preferred_tone,
+    preferred_detail_level,
+    citation_style,
+    perspective,
+    typical_client,
+    highlights_in_summary,
+    organization_name,
+    primary_role,
+    experience,
+    primary_jurisdiction,
+    main_areas_of_practice,
+    organization_type,
+    bar_enrollment_number,
+  } = req.body;
+
+  try {
+    // Ensure profile exists
+    await UserProfessionalProfile.findOrCreate(userId);
+
+    // Build update fields object - allow all fields including null and empty strings
+    const updateFields = {};
+    
+    // Boolean field - only update if explicitly provided
+    if (is_profile_completed !== undefined) {
+      updateFields.is_profile_completed = is_profile_completed;
+    }
+    
+    // String/Text fields - allow null, empty string, or any value
+    if (preferred_tone !== undefined) updateFields.preferred_tone = preferred_tone;
+    if (preferred_detail_level !== undefined) updateFields.preferred_detail_level = preferred_detail_level;
+    if (citation_style !== undefined) updateFields.citation_style = citation_style;
+    if (perspective !== undefined) updateFields.perspective = perspective;
+    if (typical_client !== undefined) updateFields.typical_client = typical_client;
+    if (highlights_in_summary !== undefined) updateFields.highlights_in_summary = highlights_in_summary;
+    if (organization_name !== undefined) updateFields.organization_name = organization_name;
+    if (primary_role !== undefined) updateFields.primary_role = primary_role;
+    if (experience !== undefined) updateFields.experience = experience;
+    if (primary_jurisdiction !== undefined) updateFields.primary_jurisdiction = primary_jurisdiction;
+    if (main_areas_of_practice !== undefined) updateFields.main_areas_of_practice = main_areas_of_practice;
+    if (organization_type !== undefined) updateFields.organization_type = organization_type;
+    if (bar_enrollment_number !== undefined) updateFields.bar_enrollment_number = bar_enrollment_number;
+
+    // Update profile
+    const updatedProfile = await UserProfessionalProfile.update(userId, updateFields);
+
+    res.status(200).json({
+      type: 'final',
+      message: 'Professional profile updated successfully',
+      data: updatedProfile,
+    });
+  } catch (error) {
+    console.error('Error updating professional profile:', error);
+    res.status(500).json({ 
+      type: 'status',
+      message: 'Internal server error' 
+    });
+  }
+};
+
 module.exports = { 
   register, 
   login, 
@@ -896,5 +1015,7 @@ module.exports = {
   fetchProfile, 
   getUserById, 
   updateRazorpayCustomerId,
-  getUserInfo
+  getUserInfo,
+  getProfessionalProfile,
+  updateProfessionalProfile
 };

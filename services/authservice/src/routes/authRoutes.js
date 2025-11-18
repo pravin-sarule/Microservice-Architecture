@@ -5,7 +5,7 @@ const router = express.Router();
 // const auth = require('../middleware/auth'); // Import auth middleware
 const { protect } = require('../middleware/auth');
 
-const { register, login, verifyOtpAndLogin, updateProfile, deleteAccount, logout, fetchProfile, getUserById, updateRazorpayCustomerId , firebaseGoogleSignIn, getUserInfo } = require('../controllers/authController');
+const { register, login, verifyOtpAndLogin, updateProfile, deleteAccount, logout, fetchProfile, getUserById, updateRazorpayCustomerId , firebaseGoogleSignIn, getUserInfo, getProfessionalProfile, updateProfessionalProfile } = require('../controllers/authController');
 
 // Register a new user
 router.post('/register', register);
@@ -32,6 +32,10 @@ router.get('/profile', protect, fetchProfile);
 
 // Fetch user info (fullname, email, mobile)
 router.get('/user-info', protect, getUserInfo);
+
+// Professional Profile routes
+router.get('/professional-profile', protect, getProfessionalProfile);
+router.put('/professional-profile', protect, updateProfessionalProfile);
 
 // Fetch user by ID
 router.get('/users/:userId', protect, getUserById);
