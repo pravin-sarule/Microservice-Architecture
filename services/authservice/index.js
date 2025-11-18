@@ -69,7 +69,7 @@ const PORT = process.env.PORT || 5001;
 // --------- CORS Setup ---------
 // Allow your frontend origin
 // ✅ Allowed origins
-const allowedOrigins = ['https://nexintelagent.netlify.app', 'https://microservicefrontend.netlify.app']; // Add your frontend URLs
+const allowedOrigins = ['http://localhost:5173', 'https://jurinex.netlify.app/']; // Add your frontend URLs
 
 // ✅ CORS setup
 app.use(cors({
