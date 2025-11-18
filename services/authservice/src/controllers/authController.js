@@ -920,13 +920,32 @@ const getProfessionalProfile = async (req, res) => {
   const userId = req.user.id;
 
   try {
+    // Fetch user data from users table
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        type: 'status',
+        message: 'User not found'
+      });
+    }
+
     // Find or create profile (auto-creates if doesn't exist)
     const profile = await UserProfessionalProfile.findOrCreate(userId);
+
+    // Combine user data with profile data
+    const responseData = {
+      // User table data
+      fullname: user.username || null,
+      email: user.email || null,
+      phone: user.phone || null,
+      // Professional profile data
+      ...profile,
+    };
 
     res.status(200).json({
       type: 'final',
       message: 'Professional profile fetched successfully',
-      data: profile,
+      data: responseData,
     });
   } catch (error) {
     console.error('Error fetching professional profile:', error);
@@ -941,8 +960,177 @@ const getProfessionalProfile = async (req, res) => {
  * @description Updates professional profile for the authenticated user.
  * @route PUT /api/auth/professional-profile
  */
+// const updateProfessionalProfile = async (req, res) => {
+//   const userId = req.user.id;
+//   const {
+//     is_profile_completed,
+//     preferred_tone,
+//     preferred_detail_level,
+//     citation_style,
+//     perspective,
+//     typical_client,
+//     highlights_in_summary,
+//     organization_name,
+//     primary_role,
+//     experience,
+//     primary_jurisdiction,
+//     main_areas_of_practice,
+//     organization_type,
+//     bar_enrollment_number,
+//   } = req.body;
+
+//   try {
+//     // Ensure profile exists
+//     await UserProfessionalProfile.findOrCreate(userId);
+
+//     // Build update fields object - allow all fields including null and empty strings
+//     const updateFields = {};
+    
+//     // Boolean field - only update if explicitly provided
+//     if (is_profile_completed !== undefined) {
+//       updateFields.is_profile_completed = is_profile_completed;
+//     }
+    
+//     // String/Text fields - allow null, empty string, or any value
+//     if (preferred_tone !== undefined) updateFields.preferred_tone = preferred_tone;
+//     if (preferred_detail_level !== undefined) updateFields.preferred_detail_level = preferred_detail_level;
+//     if (citation_style !== undefined) updateFields.citation_style = citation_style;
+//     if (perspective !== undefined) updateFields.perspective = perspective;
+//     if (typical_client !== undefined) updateFields.typical_client = typical_client;
+//     if (highlights_in_summary !== undefined) updateFields.highlights_in_summary = highlights_in_summary;
+//     if (organization_name !== undefined) updateFields.organization_name = organization_name;
+//     if (primary_role !== undefined) updateFields.primary_role = primary_role;
+//     if (experience !== undefined) updateFields.experience = experience;
+//     if (primary_jurisdiction !== undefined) updateFields.primary_jurisdiction = primary_jurisdiction;
+//     if (main_areas_of_practice !== undefined) updateFields.main_areas_of_practice = main_areas_of_practice;
+//     if (organization_type !== undefined) updateFields.organization_type = organization_type;
+//     if (bar_enrollment_number !== undefined) updateFields.bar_enrollment_number = bar_enrollment_number;
+
+//     // Update profile
+//     const updatedProfile = await UserProfessionalProfile.update(userId, updateFields);
+
+//     res.status(200).json({
+//       type: 'final',
+//       message: 'Professional profile updated successfully',
+//       data: updatedProfile,
+//     });
+//   } catch (error) {
+//     console.error('Error updating professional profile:', error);
+//     res.status(500).json({ 
+//       type: 'status',
+//       message: 'Internal server error' 
+//     });
+//   }
+// };
+
+// const updateProfessionalProfile = async (req, res) => {
+//   const userId = req.user.id;
+
+//   // Users table allowed fields
+//   const {
+//     phone,
+//     location,
+//     profile_image
+//   } = req.body;
+
+//   // Professional profile fields
+//   const {
+//     is_profile_completed,
+//     preferred_tone,
+//     preferred_detail_level,
+//     citation_style,
+//     perspective,
+//     typical_client,
+//     highlights_in_summary,
+//     organization_name,
+//     primary_role,
+//     experience,
+//     primary_jurisdiction,
+//     main_areas_of_practice,
+//     organization_type,
+//     bar_enrollment_number,
+//   } = req.body;
+
+//   try {
+//     /* -------------------------------------------
+//        1. UPDATE USERS TABLE (ONLY SAFE FIELDS)
+//     -------------------------------------------- */
+//     const userUpdateFields = {};
+
+//     if (phone !== undefined) userUpdateFields.phone = phone;
+//     if (location !== undefined) userUpdateFields.location = location;
+//     if (profile_image !== undefined) userUpdateFields.profile_image = profile_image;
+
+//     if (Object.keys(userUpdateFields).length > 0) {
+//       await Users.update(userUpdateFields, { where: { id: userId } });
+//     }
+
+//     /* -------------------------------------------
+//        2. UPDATE PROFESSIONAL PROFILE TABLE
+//     -------------------------------------------- */
+
+//     // Ensure profile exists
+//     const [profile] = await UserProfessionalProfile.findOrCreate({
+//       where: { user_id: userId },
+//       defaults: { user_id: userId }
+//     });
+
+//     const updateFields = {};
+
+//     // Boolean
+//     if (is_profile_completed !== undefined) {
+//       updateFields.is_profile_completed = is_profile_completed;
+//     }
+
+//     // Strings / Text
+//     if (preferred_tone !== undefined) updateFields.preferred_tone = preferred_tone;
+//     if (preferred_detail_level !== undefined) updateFields.preferred_detail_level = preferred_detail_level;
+//     if (citation_style !== undefined) updateFields.citation_style = citation_style;
+//     if (perspective !== undefined) updateFields.perspective = perspective;
+//     if (typical_client !== undefined) updateFields.typical_client = typical_client;
+//     if (highlights_in_summary !== undefined) updateFields.highlights_in_summary = highlights_in_summary;
+//     if (organization_name !== undefined) updateFields.organization_name = organization_name;
+//     if (primary_role !== undefined) updateFields.primary_role = primary_role;
+//     if (experience !== undefined) updateFields.experience = experience;
+//     if (primary_jurisdiction !== undefined) updateFields.primary_jurisdiction = primary_jurisdiction;
+//     if (main_areas_of_practice !== undefined) updateFields.main_areas_of_practice = main_areas_of_practice;
+//     if (organization_type !== undefined) updateFields.organization_type = organization_type;
+//     if (bar_enrollment_number !== undefined) updateFields.bar_enrollment_number = bar_enrollment_number;
+
+//     await profile.update(updateFields);
+
+//     /* -------------------------------------------
+//           RESPONSE
+//     -------------------------------------------- */
+//     res.status(200).json({
+//       type: "final",
+//       message: "Profile updated successfully",
+//       data: {
+//         user: userUpdateFields,
+//         professional_profile: profile
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error("Error updating profile:", error);
+//     res.status(500).json({
+//       type: "status",
+//       message: "Internal server error"
+//     });
+//   }
+// };
+
 const updateProfessionalProfile = async (req, res) => {
   const userId = req.user.id;
+
+  // Users table allowed fields ONLY
+  const {
+    phone,
+    location,
+    profile_image,  // optional if user wants to update profile image
+  } = req.body;
+
+  // Professional profile fields
   const {
     is_profile_completed,
     preferred_tone,
@@ -961,45 +1149,94 @@ const updateProfessionalProfile = async (req, res) => {
   } = req.body;
 
   try {
-    // Ensure profile exists
+    console.log("🔍 Updating profile for user:", userId);
+
+    /* ==================================================
+       1️⃣ UPDATE USERS TABLE (ONLY SAFE FIELDS)
+    ===================================================== */
+
+    const userUpdateFields = {};
+
+    if (phone !== undefined) userUpdateFields.phone = phone;
+    if (location !== undefined) userUpdateFields.location = location;
+    if (profile_image !== undefined) userUpdateFields.profile_image = profile_image;
+
+    if (Object.keys(userUpdateFields).length > 0) {
+      await User.update(userId, userUpdateFields);
+    }
+
+    /* ==================================================
+       2️⃣ ENSURE PROFESSIONAL PROFILE EXISTS
+    ===================================================== */
+
     await UserProfessionalProfile.findOrCreate(userId);
 
-    // Build update fields object - allow all fields including null and empty strings
-    const updateFields = {};
-    
-    // Boolean field - only update if explicitly provided
-    if (is_profile_completed !== undefined) {
-      updateFields.is_profile_completed = is_profile_completed;
-    }
-    
-    // String/Text fields - allow null, empty string, or any value
-    if (preferred_tone !== undefined) updateFields.preferred_tone = preferred_tone;
-    if (preferred_detail_level !== undefined) updateFields.preferred_detail_level = preferred_detail_level;
-    if (citation_style !== undefined) updateFields.citation_style = citation_style;
-    if (perspective !== undefined) updateFields.perspective = perspective;
-    if (typical_client !== undefined) updateFields.typical_client = typical_client;
-    if (highlights_in_summary !== undefined) updateFields.highlights_in_summary = highlights_in_summary;
-    if (organization_name !== undefined) updateFields.organization_name = organization_name;
-    if (primary_role !== undefined) updateFields.primary_role = primary_role;
-    if (experience !== undefined) updateFields.experience = experience;
-    if (primary_jurisdiction !== undefined) updateFields.primary_jurisdiction = primary_jurisdiction;
-    if (main_areas_of_practice !== undefined) updateFields.main_areas_of_practice = main_areas_of_practice;
-    if (organization_type !== undefined) updateFields.organization_type = organization_type;
-    if (bar_enrollment_number !== undefined) updateFields.bar_enrollment_number = bar_enrollment_number;
+    /* ==================================================
+       3️⃣ UPDATE PROFESSIONAL PROFILE TABLE
+    ===================================================== */
 
-    // Update profile
+    const updateFields = {};
+
+    if (is_profile_completed !== undefined)
+      updateFields.is_profile_completed = is_profile_completed;
+
+    if (preferred_tone !== undefined)
+      updateFields.preferred_tone = preferred_tone;
+
+    if (preferred_detail_level !== undefined)
+      updateFields.preferred_detail_level = preferred_detail_level;
+
+    if (citation_style !== undefined)
+      updateFields.citation_style = citation_style;
+
+    if (perspective !== undefined)
+      updateFields.perspective = perspective;
+
+    if (typical_client !== undefined)
+      updateFields.typical_client = typical_client;
+
+    if (highlights_in_summary !== undefined)
+      updateFields.highlights_in_summary = highlights_in_summary;
+
+    if (organization_name !== undefined)
+      updateFields.organization_name = organization_name;
+
+    if (primary_role !== undefined)
+      updateFields.primary_role = primary_role;
+
+    if (experience !== undefined)
+      updateFields.experience = experience;
+
+    if (primary_jurisdiction !== undefined)
+      updateFields.primary_jurisdiction = primary_jurisdiction;
+
+    if (main_areas_of_practice !== undefined)
+      updateFields.main_areas_of_practice = main_areas_of_practice;
+
+    if (organization_type !== undefined)
+      updateFields.organization_type = organization_type;
+
+    if (bar_enrollment_number !== undefined)
+      updateFields.bar_enrollment_number = bar_enrollment_number;
+
+    // Update professional profile using static method
     const updatedProfile = await UserProfessionalProfile.update(userId, updateFields);
 
+    /* ==================================================
+       4️⃣ SEND RESPONSE
+    ===================================================== */
+
     res.status(200).json({
-      type: 'final',
-      message: 'Professional profile updated successfully',
+      type: "final",
+      message: "Professional profile updated successfully",
       data: updatedProfile,
     });
+
   } catch (error) {
-    console.error('Error updating professional profile:', error);
-    res.status(500).json({ 
-      type: 'status',
-      message: 'Internal server error' 
+    console.error("❌ Error updating profile:", error);
+    res.status(500).json({
+      type: "status",
+      message: "Internal server error",
     });
   }
 };
