@@ -138,6 +138,7 @@
 
 // controllers/chatController.js
 const pool = require('../config/db'); // PostgreSQL connection
+const UserProfileService = require('../services/userProfileService');
 
 /* ============================================================
    CASE TYPES
@@ -322,6 +323,40 @@ const deleteCaseDraft = async (req, res) => {
 };
 
 /* ============================================================
+   USER PROFESSIONAL PROFILE
+============================================================ */
+
+// Get user professional profile context for AI prompts
+const getUserProfessionalProfileContext = async (req, res) => {
+  const userId = req.user?.id || req.userId;
+  const authorizationHeader = req.headers.authorization;
+
+  if (!userId) {
+    return res.status(401).json({ error: 'Unauthorized: User ID not found' });
+  }
+
+  if (!authorizationHeader) {
+    return res.status(401).json({ error: 'Unauthorized: Authorization header missing' });
+  }
+
+  try {
+    const profile = await UserProfileService.getProfile(userId, authorizationHeader);
+    const context = await UserProfileService.getProfileContext(userId, authorizationHeader);
+
+    res.status(200).json({
+      success: true,
+      profile: profile || null,
+      context: context || null,
+      hasProfile: !!profile,
+      isProfileCompleted: profile?.is_profile_completed || false,
+    });
+  } catch (error) {
+    console.error('Error fetching user professional profile:', error.message);
+    res.status(500).json({ error: 'Failed to fetch user professional profile: ' + error.message });
+  }
+};
+
+/* ============================================================
    EXPORTS
 ============================================================ */
 module.exports = {
@@ -334,4 +369,5 @@ module.exports = {
   saveCaseDraft,
   getCaseDraft,
   deleteCaseDraft,
+  getUserProfessionalProfileContext,
 };

@@ -45,6 +45,7 @@
 const express = require('express');
 const router = express.Router();
 const contentController = require('../controllers/contentController');
+const { protect } = require('../middleware/auth');
 
 /* ============================================================
    CASE TYPES ROUTES
@@ -90,6 +91,13 @@ router.get('/case-draft/:userId', contentController.getCaseDraft);
 
 // Delete draft once case is finalized
 router.delete('/case-draft/:userId', contentController.deleteCaseDraft);
+
+/* ============================================================
+   USER PROFESSIONAL PROFILE ROUTES
+============================================================ */
+
+// Get user professional profile context (for AI prompts)
+router.get('/user-professional-profile', protect, contentController.getUserProfessionalProfileContext);
 
 /* ============================================================
    EXPORT ROUTER

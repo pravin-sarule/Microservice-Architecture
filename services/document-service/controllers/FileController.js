@@ -28,6 +28,7 @@ const { checkStorageLimit } = require("../utils/storage");
 const { bucket } = require("../config/gcs");
 const { askGemini, getSummaryFromChunks, askLLM, getAvailableProviders, resolveProviderName } = require("../services/aiService");
 const { askLLM: askFolderLLMService, resolveProviderName: resolveFolderProviderName, getAvailableProviders: getFolderAvailableProviders } = require("../services/folderAiService"); // Import askLLM, resolveProviderName, and getAvailableProviders from folderAiService
+const UserProfileService = require("../services/userProfileService");
 const { extractText } = require("../utils/textExtractor");
 const {
   extractTextFromDocument,
@@ -3160,6 +3161,18 @@ exports.queryFolderDocuments = async (req, res) => {
 
       finalPrompt = appendFolderConversation(finalPrompt, conversationContext);
 
+      // ✅ CRITICAL: Append user professional profile context to the prompt
+      try {
+        const profileContext = await UserProfileService.getProfileContext(userId, authorizationHeader);
+        if (profileContext) {
+          finalPrompt = `${profileContext}\n\n---\n\n${finalPrompt}`;
+          console.log(`[queryFolderDocuments] Added user professional profile context to secret prompt`);
+        }
+      } catch (profileError) {
+        console.warn(`[queryFolderDocuments] Failed to fetch profile context:`, profileError.message);
+        // Continue without profile context - don't fail the request
+      }
+
       answer = await askFolderLLMService(provider, finalPrompt, '', llmContext);
      
       console.log(`✅ Secret prompt processed: "${secretName}"`);
@@ -3332,6 +3345,18 @@ exports.queryFolderDocuments = async (req, res) => {
       }
 
       finalPrompt = appendFolderConversation(finalPrompt, conversationContext);
+
+      // ✅ CRITICAL: Append user professional profile context to the prompt
+      try {
+        const profileContext = await UserProfileService.getProfileContext(userId, authorizationHeader);
+        if (profileContext) {
+          finalPrompt = `${profileContext}\n\n---\n\n${finalPrompt}`;
+          console.log(`[queryFolderDocuments] Added user professional profile context to custom query`);
+        }
+      } catch (profileError) {
+        console.warn(`[queryFolderDocuments] Failed to fetch profile context:`, profileError.message);
+        // Continue without profile context - don't fail the request
+      }
 
       answer = await askFolderLLMService(provider, finalPrompt, '', llmContext);
      

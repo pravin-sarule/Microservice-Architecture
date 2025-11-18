@@ -334,6 +334,23 @@ const triggerSecretLLM = async (req, res) => {
     if (additionalInput?.trim().length > 0)
       finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additionalInput.trim()}`;
 
+    // ✅ CRITICAL: Append user professional profile context to the prompt
+    try {
+      const UserProfileService = require('../services/userProfileService');
+      const userId = req.user?.id;
+      const authorizationHeader = req.headers.authorization;
+      if (userId && authorizationHeader) {
+        const profileContext = await UserProfileService.getProfileContext(userId, authorizationHeader);
+        if (profileContext) {
+          finalPrompt = `${profileContext}\n\n---\n\n${finalPrompt}`;
+          console.log(`[triggerSecretLLM] Added user professional profile context to prompt`);
+        }
+      }
+    } catch (profileError) {
+      console.warn(`[triggerSecretLLM] Failed to fetch profile context:`, profileError.message);
+      // Continue without profile context - don't fail the request
+    }
+
     console.log(`[triggerSecretLLM] Final prompt length: ${finalPrompt.length}`);
 
     // -------------------------------
@@ -573,6 +590,23 @@ const triggerAskLlmForFolder = async (req, res) => {
     finalPrompt += `${secretValue}\n\n=== DOCUMENTS TO ANALYZE (FOLDER: "${folderName}") ===\n${documentContent}`;
     if (additionalInput?.trim().length > 0)
       finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additionalInput.trim()}`;
+
+    // ✅ CRITICAL: Append user professional profile context to the prompt
+    try {
+      const UserProfileService = require('../services/userProfileService');
+      const userId = req.user?.id;
+      const authorizationHeader = req.headers.authorization;
+      if (userId && authorizationHeader) {
+        const profileContext = await UserProfileService.getProfileContext(userId, authorizationHeader);
+        if (profileContext) {
+          finalPrompt = `${profileContext}\n\n---\n\n${finalPrompt}`;
+          console.log(`[triggerAskLlmForFolder] Added user professional profile context to prompt`);
+        }
+      }
+    } catch (profileError) {
+      console.warn(`[triggerAskLlmForFolder] Failed to fetch profile context:`, profileError.message);
+      // Continue without profile context - don't fail the request
+    }
 
     console.log(`[triggerAskLlmForFolder] Final prompt length: ${finalPrompt.length}`);
 

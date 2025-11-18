@@ -39,6 +39,7 @@ const {
 } = require("../services/embeddingService");
 const { normalizeGcsKey } = require("../utils/gcsKey");
 const TokenUsageService = require("../services/tokenUsageService");
+const UserProfileService = require("../services/userProfileService");
 const { fileInputBucket, fileOutputBucket } = require("../config/gcs");
 const { checkStorageLimit } = require("../utils/storage"); // Import checkStorageLimit
 const { DOCUMENT_UPLOAD_COST_TOKENS } = require("../middleware/checkTokenLimits");
@@ -2186,7 +2187,42 @@ exports.chatWithDocument = async (req, res) => {
       // Build prompt with conversation history
       const userPrompt = question.trim();
       const conversationContext = formatConversationHistory(sessionHistory);
-      const finalPrompt = appendConversationToPrompt(userPrompt, conversationContext);
+      let finalPrompt = appendConversationToPrompt(userPrompt, conversationContext);
+
+      // ✅ CRITICAL: Append user professional profile context to the prompt
+      try {
+        // Check if user is asking about their profile
+        const isProfileQuestion = /(my|my own|my personal|my professional|give me|show me|tell me about|what is|what are).*(profile|professional|legal|credentials|bar|jurisdiction|practice|role|experience|details)/i.test(userPrompt);
+        
+        console.log(`[chatWithDocument] Profile question detected: ${isProfileQuestion} for question: "${userPrompt}"`);
+        
+        let profileContext;
+        if (isProfileQuestion) {
+          // For profile questions, get detailed profile information
+          console.log(`[chatWithDocument] Fetching detailed profile context for user ${userId}...`);
+          profileContext = await UserProfileService.getDetailedProfileContext(userId, req.headers.authorization);
+          if (!profileContext) {
+            console.log(`[chatWithDocument] Detailed profile context not available, trying regular context...`);
+            // Fallback to regular context if detailed not available
+            profileContext = await UserProfileService.getProfileContext(userId, req.headers.authorization);
+          }
+        } else {
+          // For regular questions, use standard context
+          profileContext = await UserProfileService.getProfileContext(userId, req.headers.authorization);
+        }
+        
+        if (profileContext) {
+          // Prepend profile context BEFORE the user question so AI sees it first
+          finalPrompt = `${profileContext}\n\nUSER QUESTION:\n${finalPrompt}`;
+          console.log(`[chatWithDocument] ✅ Added user professional profile context to pre-upload prompt (detailed: ${isProfileQuestion}, length: ${profileContext.length} chars)`);
+        } else {
+          console.warn(`[chatWithDocument] ⚠️ No profile context available for user ${userId}`);
+        }
+      } catch (profileError) {
+        console.error(`[chatWithDocument] ❌ Failed to fetch profile context:`, profileError.message);
+        console.error(`[chatWithDocument] Error stack:`, profileError.stack);
+        // Continue without profile context - don't fail the request
+      }
 
       console.log(`[chatWithDocument] Pre-upload conversation | Provider: ${provider} | Session: ${finalSessionId}`);
       console.log(`[chatWithDocument] Prompt length: ${finalPrompt.length} chars | History turns: ${sessionHistory.length}`);
@@ -2560,6 +2596,41 @@ exports.chatWithDocument = async (req, res) => {
 
     // ✅ CRITICAL: Append conversation history to the prompt
     finalPrompt = appendConversationToPrompt(finalPrompt, conversationContext);
+
+    // ✅ CRITICAL: Append user professional profile context to the prompt
+    try {
+      // Check if user is asking about their profile
+      const isProfileQuestion = /(my|my own|my personal|my professional|give me|show me|tell me about|what is|what are).*(profile|professional|legal|credentials|bar|jurisdiction|practice|role|experience|details)/i.test(storedQuestion);
+      
+      console.log(`[chatWithDocument] Profile question detected: ${isProfileQuestion} for question: "${storedQuestion}"`);
+      
+      let profileContext;
+      if (isProfileQuestion) {
+        // For profile questions, get detailed profile information
+        console.log(`[chatWithDocument] Fetching detailed profile context for user ${userId}...`);
+        profileContext = await UserProfileService.getDetailedProfileContext(userId, req.headers.authorization);
+        if (!profileContext) {
+          console.log(`[chatWithDocument] Detailed profile context not available, trying regular context...`);
+          // Fallback to regular context if detailed not available
+          profileContext = await UserProfileService.getProfileContext(userId, req.headers.authorization);
+        }
+      } else {
+        // For regular questions, use standard context
+        profileContext = await UserProfileService.getProfileContext(userId, req.headers.authorization);
+      }
+      
+      if (profileContext) {
+        // Prepend profile context BEFORE the question so AI sees it first
+        finalPrompt = `${profileContext}\n\nUSER QUESTION:\n${finalPrompt}`;
+        console.log(`[chatWithDocument] ✅ Added user professional profile context to prompt (detailed: ${isProfileQuestion}, length: ${profileContext.length} chars)`);
+      } else {
+        console.warn(`[chatWithDocument] ⚠️ No profile context available for user ${userId}`);
+      }
+    } catch (profileError) {
+      console.error(`[chatWithDocument] ❌ Failed to fetch profile context:`, profileError.message);
+      console.error(`[chatWithDocument] Error stack:`, profileError.stack);
+      // Continue without profile context - don't fail the request
+    }
 
     // ---------- CALL LLM ----------
     console.log(`[chatWithDocument] Calling LLM provider: ${provider} | Chunks used: ${usedChunkIds.length}`);
