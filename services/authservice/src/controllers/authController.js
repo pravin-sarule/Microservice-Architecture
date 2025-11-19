@@ -1241,6 +1241,101 @@ const updateProfessionalProfile = async (req, res) => {
   }
 };
 
+
+const changePassword = async (req, res) => {
+  const { currentPassword, newPassword, confirmPassword } = req.body;
+  const userId = req.user.id;
+
+  console.log(`[AuthController] Attempting password change for user ID: ${userId}`);
+
+  try {
+    // 1. Validate input
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json({ 
+        message: 'Current password, new password, and confirmation are required' 
+      });
+    }
+
+    // 2. Check if new password matches confirmation
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ 
+        message: 'New password and confirmation do not match' 
+      });
+    }
+
+    // 3. Validate new password strength (optional but recommended)
+    if (newPassword.length < 6) {
+      return res.status(400).json({ 
+        message: 'New password must be at least 6 characters long' 
+      });
+    }
+
+    // 4. Find user by ID
+    const user = await User.findById(userId);
+    if (!user) {
+      console.log(`[AuthController] User not found for ID: ${userId}`);
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // 5. Check if user has a password (Google sign-in users don't have passwords)
+    if (!user.password || typeof user.password !== 'string' || user.password.trim() === '') {
+      console.log(`[AuthController] User ${user.email} has no password (likely Google sign-in user).`);
+      return res.status(400).json({ 
+        message: 'This account was created using Google Sign-In and does not have a password. Password change is not available.' 
+      });
+    }
+
+    // 6. Verify current password
+    console.log(`[AuthController] Verifying current password for user: ${user.email}`);
+    const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
+    if (!isCurrentPasswordValid) {
+      console.log(`[AuthController] Current password mismatch for user: ${user.email}`);
+      return res.status(400).json({ message: 'Current password is incorrect' });
+    }
+    console.log(`[AuthController] ✅ Current password verified for user: ${user.email}`);
+
+    // 7. Check if new password is different from current password
+    const isSamePassword = await bcrypt.compare(newPassword, user.password);
+    if (isSamePassword) {
+      return res.status(400).json({ 
+        message: 'New password must be different from current password' 
+      });
+    }
+
+    // 8. Hash new password
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    console.log(`[AuthController] ✅ New password hashed for user: ${user.email}`);
+
+    // 9. Update password in database
+    await User.update(userId, { password: hashedNewPassword });
+    console.log(`[AuthController] ✅ Password updated successfully for user: ${user.email}`);
+
+    // // 10. Optional: Invalidate all existing sessions (for security)
+    // // This will force the user to log in again on all devices
+    // try {
+    //   await Session.deleteByUserId(userId); // You might need to implement this method
+    //   console.log(`[AuthController] ✅ All sessions invalidated for user: ${user.email}`);
+    // } catch (sessionError) {
+    //   console.warn(`[AuthController] ⚠️ Failed to invalidate sessions for user: ${user.email}`, sessionError);
+    //   // Don't fail the password change if session cleanup fails
+    // }
+
+    // 11. Return success response
+    res.status(200).json({
+      success: true,
+      message: 'Password changed successfully. Please log in again with your new password.',
+      // Note: Not returning a new token here to force re-authentication
+    });
+
+  } catch (error) {
+    console.error('[AuthController] ❌ Error during password change:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Internal server error' 
+    });
+  }
+};
+
 module.exports = { 
   register, 
   login, 
@@ -1254,5 +1349,6 @@ module.exports = {
   updateRazorpayCustomerId,
   getUserInfo,
   getProfessionalProfile,
-  updateProfessionalProfile
+  updateProfessionalProfile,
+  changePassword
 };

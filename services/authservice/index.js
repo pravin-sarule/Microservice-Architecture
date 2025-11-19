@@ -134,7 +134,7 @@ const PORT = process.env.PORT || 5001;
 // --------- CORS Setup ---------
 // Allow your frontend origin
 // ✅ Allowed origins
-const allowedOrigins = ['https://jurinex.netlify.app', 'https://microservicefrontend.netlify.app']; // Add your frontend URLs
+const allowedOrigins = ['https://jurinex.netlify.app', 'http://localhost:5173']; // Add your frontend URLs
 
 // ✅ CORS setup
 app.use(cors({

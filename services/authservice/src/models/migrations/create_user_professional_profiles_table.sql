@@ -61,3 +61,4 @@ BEFORE UPDATE ON user_professional_profiles
 FOR EACH ROW
 EXECUTE FUNCTION update_user_professional_profiles_updated_at();
 
+
