@@ -11,6 +11,7 @@
     "@google-cloud/documentai": "^9.4.0",
     "@google-cloud/secret-manager": "^6.1.0",
     "@google-cloud/storage": "^7.17.1",
+    "@google/genai": "^1.30.0",
     "@google/generative-ai": "^0.24.1",
     "@langchain/textsplitters": "^0.1.0",
     "axios": "^1.12.2",
