@@ -7,6 +7,60 @@ const axios = require('axios');
  */
 class UserProfileService {
   /**
+   * Get user's full name from users table
+   * @param {number} userId - User ID
+   * @param {string} authorizationHeader - Authorization header (Bearer token)
+   * @returns {Promise<string|null>} - User's full name or null
+   */
+  static async getUserName(userId, authorizationHeader) {
+    try {
+      const authServiceUrl = process.env.AUTH_SERVICE_URL || 'http://localhost:5001';
+      const gatewayUrl = process.env.API_GATEWAY_URL || 'http://localhost:5000';
+      
+      const endpoints = [];
+      if (process.env.AUTH_SERVICE_URL || !process.env.API_GATEWAY_URL) {
+        endpoints.push(`${authServiceUrl}/api/auth/profile`);
+      }
+      if (process.env.API_GATEWAY_URL) {
+        endpoints.push(`${gatewayUrl}/auth/profile`);
+      }
+      
+      if (endpoints.length === 0) {
+        endpoints.push(`${authServiceUrl}/api/auth/profile`);
+      }
+
+      let lastError = null;
+      for (const endpoint of endpoints) {
+        try {
+          const response = await axios.get(endpoint, {
+            headers: {
+              Authorization: authorizationHeader,
+              'Content-Type': 'application/json'
+            },
+            timeout: 5000
+          });
+          
+          const userName = response.data?.user?.username;
+          if (userName) {
+            console.log(`[UserProfileService] ✅ Successfully fetched user name: ${userName}`);
+            return userName;
+          }
+        } catch (error) {
+          console.warn(`[UserProfileService] Failed to fetch user name from ${endpoint}:`, error.response?.status || error.message);
+          lastError = error;
+          continue;
+        }
+      }
+      
+      console.warn(`[UserProfileService] ⚠️ Could not fetch user name. Last error:`, lastError?.response?.status || lastError?.message);
+      return null;
+    } catch (error) {
+      console.error(`[UserProfileService] ❌ Unexpected error fetching user name for user ${userId}:`, error.message);
+      return null;
+    }
+  }
+
+  /**
    * Get professional profile context string for AI prompts
    * @param {number} userId - User ID
    * @param {string} authorizationHeader - Authorization header (Bearer token)
@@ -14,6 +68,9 @@ class UserProfileService {
    */
   static async getProfileContext(userId, authorizationHeader) {
     try {
+      // Fetch user's full name first
+      const userName = await this.getUserName(userId, authorizationHeader);
+      
       // Try multiple endpoints in order: direct auth service first (most reliable for local dev)
       const authServiceUrl = process.env.AUTH_SERVICE_URL || 'http://localhost:5001';
       const gatewayUrl = process.env.API_GATEWAY_URL || 'http://localhost:5000';
@@ -61,6 +118,11 @@ class UserProfileService {
           // Build context string from profile data
           const contextParts = [];
 
+          // Always include user's name first if available
+          if (userName) {
+            contextParts.push(`User Full Name: ${userName}`);
+          }
+
           if (profile.primary_role) {
             contextParts.push(`Primary Role: ${profile.primary_role}`);
           }
@@ -102,15 +164,18 @@ class UserProfileService {
             return null;
           }
 
-          const contextString = `=== USER PROFESSIONAL PROFILE ===
+          // Build context string with name first and instructions to use it
+          let contextString = `=== USER PROFESSIONAL PROFILE ===
 The following is the authenticated user's professional profile information. Use this context to personalize your responses and answer questions about the user's profile:
 
 ${contextParts.join('\n')}
 
-IMPORTANT: When the user asks about their professional profile, legal credentials, or personal information, you should use the information provided above to answer their questions directly. This is their own profile data that they have provided to the system.
+IMPORTANT INSTRUCTIONS:
+- When the user asks about their professional profile, legal credentials, or personal information, you should use the information provided above to answer their questions directly. This is their own profile data that they have provided to the system.
+${userName ? `- ALWAYS address the user by their name "${userName}" at the beginning of your responses. For example: "${userName}, your query answer is following..." or "${userName}, here is the information you requested..."` : ''}
 
 ---`;
-          console.log(`[UserProfileService] Profile context generated for user ${userId}`);
+          console.log(`[UserProfileService] Profile context generated for user ${userId}${userName ? ` (Name: ${userName})` : ''}`);
           return contextString;
         } catch (error) {
           console.warn(`[UserProfileService] Failed to fetch from ${endpoint}:`, error.response?.status || error.message);
@@ -137,6 +202,9 @@ IMPORTANT: When the user asks about their professional profile, legal credential
    */
   static async getDetailedProfileContext(userId, authorizationHeader) {
     try {
+      // Fetch user's full name first
+      const userName = await this.getUserName(userId, authorizationHeader);
+      
       console.log(`[UserProfileService] Fetching detailed profile for user ${userId}...`);
       const profile = await this.getProfile(userId, authorizationHeader);
       console.log(`[UserProfileService] Profile fetch result:`, profile ? `Found (completed: ${profile.is_profile_completed})` : 'Not found');
@@ -148,6 +216,11 @@ IMPORTANT: When the user asks about their professional profile, legal credential
 
       // Build detailed profile information
       const details = [];
+      
+      // Always include user's name first if available
+      if (userName) {
+        details.push(`**User Full Name:** ${userName}`);
+      }
       
       if (profile.primary_role) details.push(`**Role:** ${profile.primary_role}`);
       if (profile.experience) details.push(`**Experience:** ${profile.experience}`);
@@ -179,10 +252,11 @@ CRITICAL INSTRUCTIONS:
 - Do NOT say you cannot access this information - you have it right here in the context above.
 - Provide a clear, organized response listing their profile details from the information above.
 - If they ask "give me my legal professional profile details", respond with their actual profile information from above.
+${userName ? `- ALWAYS address the user by their name "${userName}" at the beginning of your responses. For example: "${userName}, your query answer is following..." or "${userName}, here is the information you requested..."` : ''}
 
 ---`;
       
-      console.log(`[UserProfileService] Generated detailed profile context for user ${userId} (${details.length} fields)`);
+      console.log(`[UserProfileService] Generated detailed profile context for user ${userId} (${details.length} fields)${userName ? ` (Name: ${userName})` : ''}`);
       return contextString;
     } catch (error) {
       console.error(`[UserProfileService] Failed to get detailed profile context:`, error.message);
