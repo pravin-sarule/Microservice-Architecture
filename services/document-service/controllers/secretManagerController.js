@@ -357,7 +357,9 @@ const triggerSecretLLM = async (req, res) => {
     // 7️⃣ Trigger the LLM
     // -------------------------------
     console.log(`[triggerSecretLLM] Calling askLLM with provider: ${provider}...`);
-    const llmResponse = await askLLM(provider, finalPrompt, '');
+    // Use additionalInput as the original question for web search (if provided)
+    const originalQuestion = additionalInput?.trim() || secretName;
+    const llmResponse = await askLLM(provider, finalPrompt, '', '', originalQuestion);
     if (!llmResponse?.trim()) throw new Error(`Empty response received from ${provider}`);
     console.log(`[triggerSecretLLM] ✅ LLM response received (${llmResponse.length} characters)`);
 
@@ -614,7 +616,9 @@ const triggerAskLlmForFolder = async (req, res) => {
     // 8️⃣ Trigger the LLM via askFolderLLM
     // -------------------------------
     console.log(`[triggerAskLlmForFolder] Calling askFolderLLM with provider: ${provider}...`);
-    const llmResponse = await askFolderLLM(provider, finalPrompt, ''); // Use askFolderLLM
+    // Use additionalInput as the original question for web search (if provided)
+    const originalQuestion = additionalInput?.trim() || secretName;
+    const llmResponse = await askFolderLLM(provider, finalPrompt, '', null, originalQuestion); // Pass original question for web search
     if (!llmResponse?.trim()) throw new Error(`Empty response received from ${provider}`);
     console.log(`[triggerAskLlmForFolder] ✅ LLM response received (${llmResponse.length} characters)`);
 

@@ -1,0 +1,299 @@
+{
+  "info": {
+    "name": "Web Search API Tests",
+    "description": "Postman collection for testing web search functionality with Serper.dev integration",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "BASE_URL",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "AUTH_TOKEN",
+      "value": "YOUR_JWT_TOKEN_HERE",
+      "type": "string"
+    },
+    {
+      "key": "FILE_ID",
+      "value": "YOUR_FILE_ID_HERE",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Test Web Search - Current Events",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{AUTH_TOKEN}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"question\": \"What are the latest developments in AI technology in 2025?\",\n  \"file_id\": \"{{FILE_ID}}\",\n  \"llm_name\": \"gpt-4o\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{BASE_URL}}/api/doc/chat",
+          "host": ["{{BASE_URL}}"],
+          "path": ["api", "doc", "chat"]
+        },
+        "description": "This query should trigger web search because it contains 'latest' and '2025' keywords"
+      },
+      "response": []
+    },
+    {
+      "name": "2. Test Web Search - Who/What Questions",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{AUTH_TOKEN}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"question\": \"Who is the current CEO of OpenAI?\",\n  \"file_id\": \"{{FILE_ID}}\",\n  \"llm_name\": \"claude-sonnet-4\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{BASE_URL}}/api/doc/chat",
+          "host": ["{{BASE_URL}}"],
+          "path": ["api", "doc", "chat"]
+        },
+        "description": "This query should trigger web search because it's a 'who is' question about current information"
+      },
+      "response": []
+    },
+    {
+      "name": "3. Test Web Search - Recent News",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{AUTH_TOKEN}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"question\": \"What happened in the tech industry today?\",\n  \"file_id\": \"{{FILE_ID}}\",\n  \"llm_name\": \"gemini\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{BASE_URL}}/api/doc/chat",
+          "host": ["{{BASE_URL}}"],
+          "path": ["api", "doc", "chat"]
+        },
+        "description": "This query should trigger web search because it contains 'today' and 'what happened' keywords"
+      },
+      "response": []
+    },
+    {
+      "name": "4. Test Web Search - How To Questions",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{AUTH_TOKEN}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"question\": \"How to implement web search in a Node.js application?\",\n  \"file_id\": \"{{FILE_ID}}\",\n  \"llm_name\": \"deepseek\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{BASE_URL}}/api/doc/chat",
+          "host": ["{{BASE_URL}}"],
+          "path": ["api", "doc", "chat"]
+        },
+        "description": "This query should trigger web search because it's a 'how to' question"
+      },
+      "response": []
+    },
+    {
+      "name": "5. Test Web Search - Current Information",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{AUTH_TOKEN}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"question\": \"What is the current status of climate change policies in 2025?\",\n  \"file_id\": \"{{FILE_ID}}\",\n  \"llm_name\": \"gpt-4o\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{BASE_URL}}/api/doc/chat",
+          "host": ["{{BASE_URL}}"],
+          "path": ["api", "doc", "chat"]
+        },
+        "description": "This query should trigger web search because it contains 'current' and '2025' keywords"
+      },
+      "response": []
+    },
+    {
+      "name": "6. Test Without Web Search (Document Only)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{AUTH_TOKEN}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"question\": \"Summarize the main points in this document\",\n  \"file_id\": \"{{FILE_ID}}\",\n  \"llm_name\": \"gemini\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{BASE_URL}}/api/doc/chat",
+          "host": ["{{BASE_URL}}"],
+          "path": ["api", "doc", "chat"]
+        },
+        "description": "This query should NOT trigger web search - it's about the document content only"
+      },
+      "response": []
+    },
+    {
+      "name": "7. Test Folder Chat with Web Search",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{AUTH_TOKEN}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"folderName\": \"legal-documents\",\n  \"question\": \"What are the latest legal precedents in contract law?\",\n  \"llm_name\": \"claude-sonnet-4\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{BASE_URL}}/api/doc/secret/ask-llm-for-folder",
+          "host": ["{{BASE_URL}}"],
+          "path": ["api", "doc", "secret", "ask-llm-for-folder"]
+        },
+        "description": "Test folder chat with web search trigger (latest information)"
+      },
+      "response": []
+    },
+    {
+      "name": "8. Test All LLM Models with Web Search",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{AUTH_TOKEN}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"question\": \"What is the current state of quantum computing in 2025?\",\n  \"file_id\": \"{{FILE_ID}}\",\n  \"llm_name\": \"gpt-4o\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{BASE_URL}}/api/doc/chat",
+          "host": ["{{BASE_URL}}"],
+          "path": ["api", "doc", "chat"]
+        },
+        "description": "Test with different LLM models: gpt-4o, openai, claude-sonnet-4, gemini, deepseek"
+      },
+      "response": []
+    }
+  ]
+}
+

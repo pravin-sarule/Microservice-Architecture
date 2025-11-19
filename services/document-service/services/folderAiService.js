@@ -9,6 +9,252 @@ const SystemPrompt = require('../models/SystemPrompt');
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // ---------------------------
+// Web Search Service using Serper.dev
+// ---------------------------
+async function performWebSearch(query, numResults = 5) {
+  try {
+    if (!process.env.SERPER_API_KEY) {
+      console.warn('[Web Search] SERPER_API_KEY not found, skipping web search');
+      return null;
+    }
+
+    const response = await axios.post(
+      'https://google.serper.dev/search',
+      {
+        q: query,
+        num: numResults,
+      },
+      {
+        headers: {
+          'X-API-KEY': process.env.SERPER_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        timeout: 10000,
+      }
+    );
+
+    const results = response.data?.organic || [];
+    const citations = results.map((result, index) => ({
+      index: index + 1,
+      title: result.title || '',
+      link: result.link || '',
+      snippet: result.snippet || '',
+    }));
+
+    // Format search results for LLM context
+    const formattedResults = results
+      .map((result, index) => {
+        return `[${index + 1}] ${result.title || 'No title'}\nURL: ${result.link || 'No URL'}\n${result.snippet || 'No snippet'}`;
+      })
+      .join('\n\n');
+
+    return {
+      results: formattedResults,
+      citations,
+      rawResults: results,
+    };
+  } catch (error) {
+    console.error('[Web Search] Error performing search:', error.message);
+    return null;
+  }
+}
+
+// ---------------------------
+// Auto-detect if web search is needed
+// ---------------------------
+function shouldTriggerWebSearch(userMessage, context = '', relevantChunks = '') {
+  if (!userMessage) return false;
+
+  const message = userMessage.toLowerCase();
+  const contextLower = (context || '').toLowerCase();
+  const chunksLower = (relevantChunks || '').toLowerCase();
+  
+  // ============================================
+  // FIRST: Check if question is about user's own data/profile (NEVER trigger web search)
+  // ============================================
+  const personalPronouns = [
+    'my',
+    'my own',
+    'my personal',
+    'my profile',
+    'my account',
+    'my information',
+    'my data',
+  ];
+  
+  const personalDataKeywords = [
+    'my case',
+    'my organization',
+    'my company',
+    'my firm',
+    'my practice',
+    'my jurisdiction',
+    'my bar',
+    'my credentials',
+    'my role',
+    'my experience',
+    'my details',
+    'my name',
+    'my email',
+    'my phone',
+    'my address',
+    'my license',
+    'my registration',
+    'my status',
+    'my type',
+    'my category',
+  ];
+  
+  // Check if question contains personal pronouns
+  const hasPersonalPronoun = personalPronouns.some(pronoun => {
+    // Use word boundaries to match whole words
+    const regex = new RegExp(`\\b${pronoun}\\b`, 'i');
+    return regex.test(userMessage);
+  });
+  
+  // Check if question is about personal data
+  const isPersonalDataQuestion = personalDataKeywords.some(keyword => message.includes(keyword));
+  
+  // If question is about user's own data/profile, NEVER trigger web search
+  if (hasPersonalPronoun || isPersonalDataQuestion) {
+    console.log('[Web Search] Personal data/profile question detected - skipping web search (like Claude/ChatGPT) (FolderAI)');
+    return false;
+  }
+  
+  // Check if there's substantial document context provided
+  const hasDocumentContext = (contextLower.length > 500) || (chunksLower.length > 500);
+  
+  // Keywords that explicitly request web search
+  const explicitWebSearchTriggers = [
+    'search for',
+    'find information about',
+    'look up',
+    'search the web',
+    'google',
+    'web search',
+  ];
+  
+  // Keywords that suggest need for CURRENT/REAL-TIME information (not in documents)
+  const currentInfoTriggers = [
+    'latest news',
+    'current events',
+    'recent updates',
+    'what happened today',
+    'news about',
+    'breaking news',
+    'current status',
+    'latest developments',
+    'recent changes',
+  ];
+  
+  // Time-based triggers that indicate need for recent information
+  const timeBasedTriggers = [
+    'today',
+    'this week',
+    'this month',
+    'this year',
+    'now',
+    'currently',
+    'as of now',
+    'right now',
+  ];
+  
+  // Check for explicit web search requests
+  const hasExplicitTrigger = explicitWebSearchTriggers.some(trigger => message.includes(trigger));
+  if (hasExplicitTrigger) {
+    console.log('[Web Search] Explicit web search request detected (FolderAI)');
+    return true;
+  }
+  
+  // Check for current/real-time information requests
+  const hasCurrentInfoTrigger = currentInfoTriggers.some(trigger => message.includes(trigger));
+  if (hasCurrentInfoTrigger) {
+    console.log('[Web Search] Current/real-time information request detected (FolderAI)');
+    return true;
+  }
+  
+  // Check for time-based triggers combined with information requests
+  const hasTimeTrigger = timeBasedTriggers.some(trigger => message.includes(trigger));
+  const isInfoRequest = message.includes('what') || message.includes('who') || message.includes('when') || 
+                       message.includes('where') || message.includes('how') || message.includes('why');
+  
+  if (hasTimeTrigger && isInfoRequest && !hasDocumentContext) {
+    console.log('[Web Search] Time-based information request without document context (FolderAI)');
+    return true;
+  }
+  
+  // Check for general knowledge questions that are clearly NOT about documents
+  const generalKnowledgePatterns = [
+    /^what is (.+)\?/i,
+    /^who is (.+)\?/i,
+    /^when did (.+) happen\?/i,
+    /^where is (.+)\?/i,
+  ];
+  
+  const isGeneralKnowledgeQuestion = generalKnowledgePatterns.some(pattern => pattern.test(userMessage));
+  
+  // Document-related keywords that suggest question is ABOUT the documents
+  const documentRelatedKeywords = [
+    'document',
+    'this document',
+    'the document',
+    'these documents',
+    'in the document',
+    'from the document',
+    'according to',
+    'based on',
+    'analyze',
+    'summarize',
+    'explain',
+    'what does it say',
+    'what is mentioned',
+    'what is stated',
+    'extract',
+    'find in',
+    'show me from',
+  ];
+  
+  const isDocumentQuestion = documentRelatedKeywords.some(keyword => message.includes(keyword));
+  
+  // If question is about documents and we have context, don't search web
+  if (isDocumentQuestion && hasDocumentContext) {
+    console.log('[Web Search] Question is about documents and context is available - skipping web search (FolderAI)');
+    return false;
+  }
+  
+  // If it's a general knowledge question and NO document context, trigger web search
+  if (isGeneralKnowledgeQuestion && !hasDocumentContext) {
+    console.log('[Web Search] General knowledge question without document context (FolderAI)');
+    return true;
+  }
+  
+  // If there's substantial document context, be conservative - only search if explicitly needed
+  if (hasDocumentContext) {
+    // Only trigger if explicitly asking for current/recent info or web search
+    const needsCurrentInfo = hasCurrentInfoTrigger || hasTimeTrigger;
+    if (needsCurrentInfo) {
+      console.log('[Web Search] Current information needed despite document context (FolderAI)');
+      return true;
+    }
+    // Otherwise, assume answer is in documents
+    console.log('[Web Search] Document context available - assuming answer is in documents (FolderAI)');
+    return false;
+  }
+  
+  // For pre-upload chats (no document context), only trigger for specific patterns
+  if (!hasDocumentContext) {
+    // Trigger for questions that clearly need web search
+    if (isGeneralKnowledgeQuestion || hasTimeTrigger || hasCurrentInfoTrigger) {
+      console.log('[Web Search] No document context - triggering for general knowledge/time-based question (FolderAI)');
+      return true;
+    }
+  }
+  
+  // Default: don't trigger web search
+  return false;
+}
+
+// ---------------------------
 // Estimate token count (approx)
 // ---------------------------
 function estimateTokenCount(text = '') {
@@ -315,7 +561,7 @@ function resolveProviderName(name = '') {
 // ---------------------------
 // Main Optimized LLM Caller - MASSIVE TOKEN REDUCTION
 // ---------------------------
-async function askLLM(providerName, userMessage, context = '', relevant_chunks = null) {
+async function askLLM(providerName, userMessage, context = '', relevant_chunks = null, originalQuestion = null) {
   const provider = resolveProviderName(providerName);
   const config = ALL_LLM_CONFIGS[provider];
   if (!config) throw new Error(`❌ Unsupported LLM provider: ${provider}`);
@@ -323,26 +569,82 @@ async function askLLM(providerName, userMessage, context = '', relevant_chunks =
   // Ensure context is always a string
   const safeContext = typeof context === 'string' ? context : '';
 
+  // Extract original user question for web search (before context is added)
+  let userQuestionForSearch = originalQuestion || userMessage;
+  
+  // Try to extract the actual question if userMessage contains context markers
+  if (!originalQuestion && userMessage) {
+    const userQuestionMatch = userMessage.match(/USER QUESTION:\s*(.+?)(?:\n\n===|$)/s);
+    if (userQuestionMatch) {
+      userQuestionForSearch = userQuestionMatch[1].trim();
+    } else {
+      // Extract first meaningful line before context sections
+      const lines = userMessage.split('\n');
+      const contextMarkers = ['===', '---', 'Relevant Context', 'DOCUMENT', 'PROFILE'];
+      for (let i = 0; i < lines.length; i++) {
+        if (contextMarkers.some(marker => lines[i].includes(marker))) {
+          userQuestionForSearch = lines.slice(0, i).join(' ').trim();
+          break;
+        }
+      }
+      // Fallback to first 200 chars
+      if (!userQuestionForSearch || userQuestionForSearch.length > 500) {
+        userQuestionForSearch = userMessage.substring(0, 200).trim();
+      }
+    }
+  }
+
   // ✅ OPTIMIZATION 1: Trim context aggressively (200 tokens max)
   const trimmedContext = trimContext(safeContext, 200);
   
   // ✅ OPTIMIZATION 2: Filter only top 1 most relevant chunks
-  const filteredChunks = filterRelevantChunks(relevant_chunks, userMessage, 5);
+  const filteredChunks = filterRelevantChunks(relevant_chunks, userQuestionForSearch, 5);
   
   // ✅ OPTIMIZATION 3: Trim filtered chunks to reduce token count further
   const trimmedFilteredChunks = trimContext(filteredChunks, 700); // Limit chunk content to 700 tokens
+
+  // Check if web search is needed - ONLY use the original user question, not the full prompt
+  // Pass document context and chunks to determine if web search is actually needed
+  let webSearchData = null;
+  let citations = [];
+  
+  // Check if web search is needed based on question and available document context
+  if (shouldTriggerWebSearch(userQuestionForSearch, trimmedContext, trimmedFilteredChunks)) {
+    console.log('[Web Search] 🔍 Auto-triggering web search for user question (FolderAI):', userQuestionForSearch.substring(0, 100));
+    webSearchData = await performWebSearch(userQuestionForSearch, 5);
+    
+    if (webSearchData && webSearchData.results) {
+      citations = webSearchData.citations;
+      console.log(`[Web Search] ✅ Found ${citations.length} search results with citations (FolderAI)`);
+    } else {
+      console.log('[Web Search] ⚠️ No search results found (FolderAI)');
+    }
+  }
   
   // ✅ OPTIMIZATION 4: Build minimal prompt
   let prompt = userMessage.trim();
   if (trimmedFilteredChunks) {
     prompt += `\n\nRelevant Context:\n${trimmedFilteredChunks}`;
   }
+  
+  // Add web search results to prompt if available
+  if (webSearchData && webSearchData.results) {
+    prompt += `\n\n[Web Search Results - Use this information to provide accurate, up-to-date answers. Include citations when referencing these sources:]\n${webSearchData.results}`;
+  }
 
   const totalTokens = estimateTokenCount(prompt + trimmedContext);
-  console.log(`[askLLM] Optimized Tokens: ${totalTokens} (context: ${estimateTokenCount(trimmedContext)}, chunks: ${estimateTokenCount(trimmedFilteredChunks || '')})`);
+  console.log(`[askLLM] Optimized Tokens: ${totalTokens} (context: ${estimateTokenCount(trimmedContext)}, chunks: ${estimateTokenCount(trimmedFilteredChunks || '')})${webSearchData ? ' (with web search)' : ''}`);
 
   // ✅ OPTIMIZATION 4: Single request only (no chunking - saves massive tokens)
-  return await retryWithBackoff(() => callSinglePrompt(provider, prompt, trimmedContext));
+  const response = await retryWithBackoff(() => callSinglePrompt(provider, prompt, trimmedContext));
+
+  // Append citations to response if web search was performed
+  if (citations.length > 0) {
+    const citationsText = '\n\n---\n**Sources:**\n' + citations.map(c => `${c.index}. [${c.title}](${c.link})`).join('\n');
+    return response + citationsText;
+  }
+
+  return response;
 }
 
 // ---------------------------

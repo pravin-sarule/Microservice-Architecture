@@ -2227,8 +2227,8 @@ exports.chatWithDocument = async (req, res) => {
       console.log(`[chatWithDocument] Pre-upload conversation | Provider: ${provider} | Session: ${finalSessionId}`);
       console.log(`[chatWithDocument] Prompt length: ${finalPrompt.length} chars | History turns: ${sessionHistory.length}`);
       
-      // Get AI response
-      const answer = await askLLM(provider, finalPrompt, ''); // Empty context since it's already in prompt
+      // Get AI response - pass original question for web search
+      const answer = await askLLM(provider, finalPrompt, '', '', userPrompt); // Pass original question for web search
 
       if (!answer?.trim()) {
         return res.status(500).json({ error: 'Empty response from AI.' });
@@ -2634,7 +2634,8 @@ exports.chatWithDocument = async (req, res) => {
 
     // ---------- CALL LLM ----------
     console.log(`[chatWithDocument] Calling LLM provider: ${provider} | Chunks used: ${usedChunkIds.length}`);
-    const answer = await askLLM(provider, finalPrompt, '');
+    // Pass the original user question separately so web search only uses that, not the full prompt
+    const answer = await askLLM(provider, finalPrompt, '', '', storedQuestion);
 
     if (!answer?.trim()) {
       return res.status(500).json({ error: 'Empty response from AI.' });
