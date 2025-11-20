@@ -2103,6 +2103,68 @@ exports.getSummary = async (req, res) => {
 //     });
 //   }
 // };
+
+/**
+ * Analyzes user query to determine if it needs full document or targeted search
+ * @param {string} question - The user's question/query
+ * @returns {Object} Analysis result with strategy, threshold, and reason
+ */
+function analyzeQueryIntent(question) {
+  if (!question || typeof question !== 'string') {
+    return {
+      needsFullDocument: false,
+      threshold: 0.75,
+      strategy: 'TARGETED_RAG',
+      reason: 'Invalid query - defaulting to targeted search'
+    };
+  }
+
+  const queryLower = question.toLowerCase();
+  
+  // Keywords that indicate need for FULL DOCUMENT analysis
+  const fullDocumentKeywords = [
+    'summary', 'summarize', 'overview', 'complete', 'entire', 'all',
+    'comprehensive', 'detailed analysis', 'full details', 'everything',
+    'list all', 'what are all', 'give me all', 'extract all',
+    'analyze', 'review', 'examine', 'timeline', 'chronology',
+    'what is this document', 'what does this document', 'document about',
+    'key points', 'main points', 'important information',
+    'case details', 'petition details', 'contract terms',
+    'parties involved', 'background', 'history'
+  ];
+  
+  // Keywords that indicate TARGETED search is okay
+  const targetedKeywords = [
+    'specific section', 'find where', 'locate', 'search for',
+    'what does it say about', 'mention of', 'reference to',
+    'clause', 'paragraph', 'page', 'section'
+  ];
+  
+  // Check for full document indicators
+  const needsFullDoc = fullDocumentKeywords.some(keyword => 
+    queryLower.includes(keyword)
+  );
+  
+  // Check for targeted search indicators
+  const isTargeted = targetedKeywords.some(keyword => 
+    queryLower.includes(keyword)
+  );
+  
+  // Special handling for short questions (usually broad)
+  const isShortQuestion = question.trim().split(' ').length <= 5;
+  
+  // Questions asking "what/who/when/where/why/how" with no specific target
+  const isBroadQuestion = /^(what|who|when|where|why|how)\s/i.test(queryLower) && 
+                          !isTargeted;
+  
+  return {
+    needsFullDocument: needsFullDoc || (isBroadQuestion && !isTargeted) || isShortQuestion,
+    threshold: needsFullDoc ? 0.0 : (isTargeted ? 0.80 : 0.75),
+    strategy: needsFullDoc ? 'FULL_DOCUMENT' : 'TARGETED_RAG',
+    reason: needsFullDoc ? 'Query requires comprehensive analysis' : 'Query is specific/targeted'
+  };
+}
+
 exports.chatWithDocument = async (req, res) => {
   let userId = null;
 
@@ -2342,13 +2404,49 @@ exports.chatWithDocument = async (req, res) => {
       console.log('[chatWithDocument] No prior context for this session.');
     }
 
-    // ✅ RAG CONFIGURATION
-    const SIMILARITY_THRESHOLD = 0.75;
-    const MIN_CHUNKS = 5;
-    const MAX_CHUNKS = 10;
-    const MAX_CONTEXT_TOKENS = 4000;
+    // ✅ ADAPTIVE RAG CONFIGURATION - Detects query type and adjusts strategy
+    // For custom questions, analyze the query intent
+    // For secret prompts, we'll analyze later in the secret prompt section
+    const questionToAnalyze = question?.trim() || '';
+    const queryAnalysis = analyzeQueryIntent(questionToAnalyze);
+
+    let SIMILARITY_THRESHOLD, MIN_CHUNKS, MAX_CHUNKS, MAX_CONTEXT_TOKENS, useFullDocument;
+
+    if (queryAnalysis.needsFullDocument && !used_secret_prompt) {
+      // COMPREHENSIVE ANALYSIS MODE - Use entire document
+      console.log(`🔍 Query requires full document analysis: "${questionToAnalyze.substring(0, 100)}..."`);
+      useFullDocument = true;
+      MIN_CHUNKS = 999999; // Force all chunks
+      MAX_CHUNKS = 999999;
+      MAX_CONTEXT_TOKENS = 25000; // ~100K tokens context (adjust based on your LLM)
+      SIMILARITY_THRESHOLD = 0.0; // Accept all chunks
+    } else {
+      // TARGETED SEARCH MODE - Use semantic search
+      console.log(`🎯 Query is targeted, using RAG with threshold ${queryAnalysis.threshold}`);
+      useFullDocument = false;
+      SIMILARITY_THRESHOLD = queryAnalysis.threshold;
+      MIN_CHUNKS = 5;
+      MAX_CHUNKS = 10;
+      MAX_CONTEXT_TOKENS = 4000;
+    }
+
     const CHARS_PER_TOKEN = 4;
     const MAX_CONTEXT_CHARS = MAX_CONTEXT_TOKENS * CHARS_PER_TOKEN;
+
+    // Log query analysis results
+    console.log(`
+╔════════════════════════════════════════════════════════════════════
+║ 📊 QUERY ANALYSIS RESULTS
+╠════════════════════════════════════════════════════════════════════
+║ Query: "${questionToAnalyze.substring(0, 100)}${questionToAnalyze.length > 100 ? '...' : ''}"
+║ Strategy: ${queryAnalysis.strategy}
+║ Reason: ${queryAnalysis.reason}
+║ Full Document Mode: ${useFullDocument ? '✅ YES' : '❌ NO'}
+║ Similarity Threshold: ${SIMILARITY_THRESHOLD}
+║ Max Chunks: ${MAX_CHUNKS === 999999 ? 'ALL' : MAX_CHUNKS}
+║ Max Context Tokens: ${MAX_CONTEXT_TOKENS}
+╚════════════════════════════════════════════════════════════════════
+`);
 
     // ---------- PROMPT BUILDING ----------
     let usedChunkIds = [];
@@ -2356,6 +2454,7 @@ exports.chatWithDocument = async (req, res) => {
     let finalPromptLabel = prompt_label;
     let provider = 'gemini';
     let finalPrompt = '';
+    let adaptiveSystemContext = ''; // Will store adaptive instructions to be combined with database system prompt
 
     // ================================
     // SECRET PROMPT HANDLING
@@ -2387,87 +2486,204 @@ exports.chatWithDocument = async (req, res) => {
       const [accessResponse] = await client.accessSecretVersion({ name: gcpSecretName });
       const secretValue = accessResponse.payload.data.toString('utf8');
 
-      // Get all chunks and apply smart selection
-      const allChunks = await FileChunkModel.getChunksByFileId(file_id);
-      
-      if (!allChunks || allChunks.length === 0) {
-        return res.status(400).json({ error: 'No content found in document.' });
+      // ✅ ADD: Analyze if secret prompt needs full document
+      const secretQueryAnalysis = analyzeQueryIntent(secretValue);
+      const useFullDocumentForSecret = secretQueryAnalysis.needsFullDocument;
+
+      console.log(`🔐 Secret prompt analysis mode: ${useFullDocumentForSecret ? 'FULL DOCUMENT' : 'TARGETED'}`);
+      console.log(`🔐 Secret prompt strategy: ${secretQueryAnalysis.strategy} - ${secretQueryAnalysis.reason}`);
+
+      let rankedChunks;
+
+      if (useFullDocumentForSecret) {
+        // GET ALL CHUNKS for secret prompt
+        console.log(`📚 Fetching ALL chunks for secret prompt comprehensive analysis...`);
+        const allChunks = await FileChunkModel.getChunksByFileId(file_id);
+        if (!allChunks || allChunks.length === 0) {
+          return res.status(400).json({ error: 'No content found in document.' });
+        }
+        rankedChunks = allChunks
+          .sort((a, b) => {
+            if ((a.page_start || 0) !== (b.page_start || 0)) {
+              return (a.page_start || 0) - (b.page_start || 0);
+            }
+            return (a.chunk_index || 0) - (b.chunk_index || 0);
+          })
+          .map(chunk => ({ 
+            ...chunk, 
+            similarity: 1.0, 
+            chunk_id: chunk.id, 
+            distance: 0 
+          }));
+        
+        console.log(`✅ Using all ${rankedChunks.length} chunks for secret prompt`);
+      } else {
+        // USE EMBEDDING SEARCH - Original logic
+        console.log(`🔍 Performing semantic search for secret prompt...`);
+        const secretEmbedding = await generateEmbedding(secretValue);
+        rankedChunks = await ChunkVectorModel.findNearestChunks(
+          secretEmbedding,
+          MAX_CHUNKS,
+          file_id
+        );
       }
 
-      // Use embedding-based selection for secret prompts
-      const secretEmbedding = await generateEmbedding(secretValue);
-      const rankedChunks = await ChunkVectorModel.findNearestChunks(
-        secretEmbedding,
-        MAX_CHUNKS,
-        file_id
-      );
+      if (!rankedChunks || rankedChunks.length === 0) {
+        // Fallback: use all chunks if no vector matches
+        console.log('⚠️ No chunks retrieved for secret prompt, using all chunks as fallback');
+        const allChunks = await FileChunkModel.getChunksByFileId(file_id);
+        rankedChunks = allChunks.map(c => ({ 
+          ...c, 
+          similarity: 0.5, 
+          chunk_id: c.id, 
+          distance: 0.5 
+        }));
+      }
 
-      // Filter by similarity threshold
-      const highQualityChunks = rankedChunks
-        .filter(chunk => {
-          const similarity = chunk.similarity || chunk.distance || 0;
-          const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
-          return score >= SIMILARITY_THRESHOLD;
-        })
-        .sort((a, b) => {
-          const scoreA = a.similarity > 1 ? (1 / (1 + a.similarity)) : a.similarity;
-          const scoreB = b.similarity > 1 ? (1 / (1 + b.similarity)) : b.similarity;
-          return scoreB - scoreA;
-        });
+      // ADAPTIVE FILTERING for secret prompts
+      let selectedChunks;
 
-      console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${rankedChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
+      if (useFullDocumentForSecret) {
+        // USE ALL CHUNKS - No filtering
+        selectedChunks = rankedChunks;
+        console.log(`📄 Using ALL ${selectedChunks.length} chunks for secret prompt comprehensive analysis`);
+      } else {
+        // APPLY SIMILARITY FILTERING
+        const highQualityChunks = rankedChunks
+          .filter(chunk => {
+            const similarity = chunk.similarity || chunk.distance || 0;
+            const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+            return score >= SIMILARITY_THRESHOLD;
+          })
+          .sort((a, b) => {
+            const scoreA = a.similarity > 1 ? (1 / (1 + a.similarity)) : a.similarity;
+            const scoreB = b.similarity > 1 ? (1 / (1 + b.similarity)) : b.similarity;
+            return scoreB - scoreA;
+          });
 
-      // Select 5-10 best chunks within token budget
-      let selectedChunks = [];
-      let currentContextLength = 0;
+        console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${rankedChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
 
-      const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
-        ? highQualityChunks 
-        : rankedChunks;
+        // Select chunks within token budget
+        selectedChunks = [];
+        let currentContextLength = 0;
 
-      for (const chunk of chunksToConsider) {
-        if (selectedChunks.length >= MAX_CHUNKS) break;
-        
-        const chunkLength = chunk.content.length;
-        if (currentContextLength + chunkLength <= MAX_CONTEXT_CHARS) {
-          selectedChunks.push(chunk);
-          currentContextLength += chunkLength;
-        } else if (selectedChunks.length < MIN_CHUNKS) {
-          const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
-          if (remainingSpace > 500) {
-            selectedChunks.push({
-              ...chunk,
-              content: chunk.content.substring(0, remainingSpace - 100) + "..."
-            });
-            currentContextLength += remainingSpace;
+        const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
+          ? highQualityChunks 
+          : rankedChunks;
+
+        for (const chunk of chunksToConsider) {
+          if (selectedChunks.length >= MAX_CHUNKS) break;
+          
+          const chunkLength = chunk.content?.length || 0;
+          if (currentContextLength + chunkLength <= MAX_CONTEXT_CHARS) {
+            selectedChunks.push(chunk);
+            currentContextLength += chunkLength;
+          } else if (selectedChunks.length < MIN_CHUNKS) {
+            const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
+            if (remainingSpace > 500) {
+              selectedChunks.push({
+                ...chunk,
+                content: chunk.content.substring(0, remainingSpace - 100) + "..."
+              });
+              currentContextLength += remainingSpace;
+            }
+            break;
           }
-          break;
+        }
+
+        // Ensure minimum chunks
+        if (selectedChunks.length < MIN_CHUNKS && rankedChunks.length >= MIN_CHUNKS) {
+          selectedChunks = rankedChunks.slice(0, MIN_CHUNKS);
         }
       }
 
-      const finalChunks = selectedChunks.length >= MIN_CHUNKS 
-        ? selectedChunks 
-        : chunksToConsider.slice(0, MIN_CHUNKS);
+      // Ensure chunks are in document order for full document mode
+      if (useFullDocumentForSecret) {
+        selectedChunks.sort((a, b) => {
+          if ((a.page_start || 0) !== (b.page_start || 0)) {
+            return (a.page_start || 0) - (b.page_start || 0);
+          }
+          return (a.chunk_index || 0) - (b.chunk_index || 0);
+        });
+      }
 
-      console.log(`✅ Selected ${finalChunks.length} chunks for secret prompt | Context: ${currentContextLength} chars (~${Math.ceil(currentContextLength / CHARS_PER_TOKEN)} tokens)`);
+      const totalContextLength = selectedChunks.reduce((sum, c) => sum + (c.content?.length || 0), 0);
+      const estimatedTokens = Math.ceil(totalContextLength / CHARS_PER_TOKEN);
 
-      usedChunkIds = finalChunks.map((c) => c.chunk_id || c.id);
+      console.log(`✅ Final selection for secret prompt: ${selectedChunks.length} chunks | ${totalContextLength} chars (~${estimatedTokens} tokens)`);
 
-      // Build context with separators and metadata
-      const docContent = finalChunks
+      usedChunkIds = selectedChunks.map((c) => c.chunk_id || c.id);
+
+      // Build comprehensive context for secret prompts
+      const documentContext = selectedChunks
         .map((c, idx) => {
-          const similarity = c.similarity || c.distance || 0;
-          const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
-          return `--- Chunk ${idx + 1} | Relevance: ${(score * 100).toFixed(1)}% ---\n${c.content}`;
+          let chunkHeader = `\n${'='.repeat(80)}\n`;
+          
+          if (useFullDocumentForSecret) {
+            chunkHeader += `SECTION ${idx + 1} of ${selectedChunks.length}`;
+            if (c.page_start) {
+              chunkHeader += ` | Page ${c.page_start}`;
+              if (c.page_end && c.page_end !== c.page_start) {
+                chunkHeader += `-${c.page_end}`;
+              }
+            }
+            if (c.heading) {
+              chunkHeader += `\nHeading: ${c.heading}`;
+            }
+          } else {
+            const similarity = c.similarity || c.distance || 0;
+            const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+            chunkHeader += `CHUNK ${idx + 1} | Relevance: ${(score * 100).toFixed(1)}%`;
+            if (c.page_start) {
+              chunkHeader += ` | Page ${c.page_start}`;
+            }
+          }
+          
+          chunkHeader += `\n${'='.repeat(80)}\n\n`;
+          
+          return chunkHeader + (c.content || '');
         })
         .join('\n\n');
 
-      finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n${secretValue}\n\n=== DOCUMENT TO ANALYZE ===\n${docContent}`;
-      
-      if (additional_input?.trim()) {
-        const trimmedInput = additional_input.trim().substring(0, 500);
-        finalPrompt += `\n\n=== ADDITIONAL USER INSTRUCTIONS ===\n${trimmedInput}`;
-      }
+      // Build adaptive system instructions for secret prompts
+      adaptiveSystemContext = `
+═══════════════════════════════════════════════════════════════════════
+SECRET PROMPT ANALYSIS MODE: ${useFullDocumentForSecret ? 'COMPREHENSIVE (Full Document)' : 'TARGETED (Relevant Sections)'}
+═══════════════════════════════════════════════════════════════════════
+
+SECRET PROMPT INSTRUCTIONS:
+${secretValue}
+
+${useFullDocumentForSecret ? `
+📚 FULL DOCUMENT ANALYSIS MODE ACTIVATED FOR SECRET PROMPT:
+
+CRITICAL: You have been provided with the COMPLETE document content below.
+You MUST:
+- Analyze ALL sections comprehensively
+- Extract EVERY relevant detail
+- Follow the secret prompt instructions above for ALL sections of the document
+- Extract complete timelines, all parties, all amounts, all legal provisions
+` : `
+🎯 TARGETED ANALYSIS MODE ACTIVATED FOR SECRET PROMPT:
+
+CRITICAL: You have been provided with the MOST RELEVANT sections from the document.
+You MUST:
+- Focus on the specific question/task in the secret prompt
+- Extract specific details from the provided sections
+- If information seems incomplete, note that only relevant sections were provided
+`}
+
+${additional_input?.trim() ? `\n=== ADDITIONAL USER INSTRUCTIONS ===\n${additional_input.trim().substring(0, 500)}` : ''}
+
+⚠️ STRICT COMPLIANCE: Follow ALL instructions above. The database system prompt takes precedence, but these secret prompt instructions are MANDATORY enhancements.
+═══════════════════════════════════════════════════════════════════════
+`;
+
+      // Build user message with secret prompt question and document context only
+      finalPrompt = `Analyze the document according to the secret prompt instructions provided in the system context.
+
+${useFullDocumentForSecret ? 'COMPLETE DOCUMENT CONTENT:' : 'RELEVANT DOCUMENT SECTIONS:'}
+${documentContext}`;
 
       storedQuestion = secretName;
     } 
@@ -2509,28 +2725,61 @@ exports.chatWithDocument = async (req, res) => {
         provider = 'gemini';
       }
 
-      // Vector search with similarity scoring
-      const questionEmbedding = await generateEmbedding(storedQuestion);
-      const rankedChunks = await ChunkVectorModel.findNearestChunks(
-        questionEmbedding,
-        MAX_CHUNKS,
-        file_id
-      );
+      // ADAPTIVE CHUNK SELECTION based on query intent
+      let rankedChunks;
+
+      if (useFullDocument) {
+        // GET ALL CHUNKS - No embedding search needed
+        console.log(`📚 Fetching ALL chunks for comprehensive analysis...`);
+        const allChunks = await FileChunkModel.getChunksByFileId(file_id);
+        
+        if (!allChunks || allChunks.length === 0) {
+          return res.status(400).json({ error: 'No content found in document.' });
+        }
+        
+        // Sort by page/chunk order to maintain document flow
+        rankedChunks = allChunks
+          .sort((a, b) => {
+            if (a.page_start !== b.page_start) {
+              return (a.page_start || 0) - (b.page_start || 0);
+            }
+            return (a.chunk_index || 0) - (b.chunk_index || 0);
+          })
+          .map(chunk => ({
+            ...chunk,
+            similarity: 1.0, // Mark as fully relevant
+            chunk_id: chunk.id,
+            distance: 0
+          }));
+        
+        console.log(`✅ Retrieved ${rankedChunks.length} chunks for full document analysis`);
+      } else {
+        // USE SEMANTIC SEARCH - Original logic
+        console.log(`🔍 Performing semantic search for targeted query...`);
+        const questionEmbedding = await generateEmbedding(storedQuestion);
+        rankedChunks = await ChunkVectorModel.findNearestChunks(
+          questionEmbedding,
+          MAX_CHUNKS,
+          file_id
+        );
+      }
 
       if (!rankedChunks || rankedChunks.length === 0) {
         // Fallback: use all chunks if no vector matches
-        console.log('⚠️ No vector matches found, using all chunks as fallback');
+        console.log('⚠️ No chunks retrieved, using all chunks as fallback');
         const allChunks = await FileChunkModel.getChunksByFileId(file_id);
-        const limitedChunks = allChunks.slice(0, MIN_CHUNKS);
-        usedChunkIds = limitedChunks.map((c) => c.id);
-        
-        const docContent = limitedChunks
-          .map((c, idx) => `--- Chunk ${idx + 1} ---\n${c.content}`)
-          .join('\n\n');
-        
-        finalPrompt = `${storedQuestion}\n\n=== DOCUMENT CONTEXT ===\n${docContent}`;
+        rankedChunks = allChunks.map(c => ({ ...c, similarity: 0.5, chunk_id: c.id, distance: 0.5 }));
+      }
+
+      // ADAPTIVE FILTERING based on query intent
+      let selectedChunks;
+
+      if (useFullDocument) {
+        // USE ALL CHUNKS - No filtering
+        selectedChunks = rankedChunks;
+        console.log(`📄 Using ALL ${selectedChunks.length} chunks for comprehensive analysis`);
       } else {
-        // Filter by similarity threshold
+        // APPLY SIMILARITY FILTERING - Original logic
         const highQualityChunks = rankedChunks
           .filter(chunk => {
             const similarity = chunk.similarity || chunk.distance || 0;
@@ -2545,8 +2794,8 @@ exports.chatWithDocument = async (req, res) => {
 
         console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${rankedChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
 
-        // Select 5-10 best chunks within token budget
-        let selectedChunks = [];
+        // Select chunks within token budget
+        selectedChunks = [];
         let currentContextLength = 0;
 
         const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
@@ -2573,25 +2822,134 @@ exports.chatWithDocument = async (req, res) => {
           }
         }
 
-        const finalChunks = selectedChunks.length >= MIN_CHUNKS 
-          ? selectedChunks 
-          : chunksToConsider.slice(0, MIN_CHUNKS);
+        // Ensure minimum chunks
+        if (selectedChunks.length < MIN_CHUNKS && rankedChunks.length >= MIN_CHUNKS) {
+          selectedChunks = rankedChunks.slice(0, MIN_CHUNKS);
+        }
+      }
 
-        console.log(`✅ Selected ${finalChunks.length} chunks | Context: ${currentContextLength} chars (~${Math.ceil(currentContextLength / CHARS_PER_TOKEN)} tokens)`);
+      // Calculate actual context size
+      const totalContextLength = selectedChunks.reduce((sum, c) => sum + (c.content?.length || 0), 0);
+      const estimatedTokens = Math.ceil(totalContextLength / CHARS_PER_TOKEN);
 
-        usedChunkIds = finalChunks.map((c) => c.chunk_id || c.id);
+      console.log(`✅ Final selection: ${selectedChunks.length} chunks | ${totalContextLength} chars (~${estimatedTokens} tokens)`);
 
-        // Build context with separators and metadata
-        const relevantTexts = finalChunks
-          .map((c, idx) => {
+      // Ensure chunks are in document order for full document mode
+      if (useFullDocument) {
+        selectedChunks.sort((a, b) => {
+          if ((a.page_start || 0) !== (b.page_start || 0)) {
+            return (a.page_start || 0) - (b.page_start || 0);
+          }
+          return (a.chunk_index || 0) - (b.chunk_index || 0);
+        });
+      }
+
+      usedChunkIds = selectedChunks.map((c) => c.chunk_id || c.id);
+
+      // Build comprehensive document context
+      const documentContext = selectedChunks
+        .map((c, idx) => {
+          let chunkHeader = `\n${'='.repeat(80)}\n`;
+          
+          if (useFullDocument) {
+            // For full document mode, show document structure
+            chunkHeader += `SECTION ${idx + 1} of ${selectedChunks.length}`;
+            if (c.page_start) {
+              chunkHeader += ` | Page ${c.page_start}`;
+              if (c.page_end && c.page_end !== c.page_start) {
+                chunkHeader += `-${c.page_end}`;
+              }
+            }
+            if (c.heading) {
+              chunkHeader += `\nHeading: ${c.heading}`;
+            }
+          } else {
+            // For targeted mode, show relevance
             const similarity = c.similarity || c.distance || 0;
             const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
-            return `--- Chunk ${idx + 1} | Relevance: ${(score * 100).toFixed(1)}% ---\n${c.content}`;
-          })
-          .join('\n\n');
+            chunkHeader += `CHUNK ${idx + 1} | Relevance: ${(score * 100).toFixed(1)}%`;
+            if (c.page_start) {
+              chunkHeader += ` | Page ${c.page_start}`;
+            }
+          }
+          
+          chunkHeader += `\n${'='.repeat(80)}\n\n`;
+          
+          return chunkHeader + (c.content || '');
+        })
+        .join('\n\n');
 
-        finalPrompt = `${storedQuestion}\n\n=== RELEVANT CONTEXT ===\n${relevantTexts}`;
-      }
+      // Build adaptive system instructions that will be combined with database system prompt
+      // These instructions enhance the database system prompt based on query intent
+      // Store in a variable to pass as context to askLLM
+      const adaptiveInstructions = `
+═══════════════════════════════════════════════════════════════════════
+DOCUMENT ANALYSIS MODE: ${useFullDocument ? 'COMPREHENSIVE (Full Document)' : 'TARGETED (Relevant Sections)'}
+═══════════════════════════════════════════════════════════════════════
+
+${useFullDocument ? `
+📚 FULL DOCUMENT ANALYSIS MODE ACTIVATED:
+
+You have been provided with the COMPLETE document content below.
+You MUST:
+- Analyze ALL sections comprehensively
+- Extract EVERY relevant detail mentioned in the document
+- Organize information logically with clear headings and structure
+- Include ALL dates, amounts, names, references, and specific details
+- Do NOT skip any important information
+- Extract complete timelines, all parties, all amounts, all legal provisions
+` : `
+🎯 TARGETED ANALYSIS MODE ACTIVATED:
+
+You have been provided with the MOST RELEVANT sections from the document.
+You MUST:
+- Focus on answering the specific question asked
+- Extract specific details from the provided sections
+- If information seems incomplete, note that only relevant sections were provided
+`}
+
+CRITICAL EXTRACTION REQUIREMENTS:
+
+1. Extract EXACT information - use direct quotes for:
+   - Party names (full legal names)
+   - Case numbers, document references
+   - Dates (format: DD.MM.YYYY)
+   - Monetary amounts (with currency)
+   - Legal provisions, section numbers, clause references
+
+2. Structure your response with:
+   - Clear section headings (use ## for main sections)
+   - Bullet points for lists
+   - Tables for comparative data (use markdown tables)
+   - Chronological timelines for events
+   - Numbered lists for legal grounds/arguments
+
+3. If information is NOT found, explicitly state "NOT MENTIONED IN DOCUMENT"
+
+4. Maintain document context:
+   - Reference page numbers when citing information
+   - Note which section information came from
+   - Preserve relationships between facts
+
+5. Be comprehensive but organized:
+   - Start with document identification (type, parties, date)
+   - Then provide structured analysis
+   - End with summary of key takeaways
+
+⚠️ STRICT COMPLIANCE: Follow ALL instructions above. The database system prompt takes precedence, but these adaptive instructions are MANDATORY enhancements for this query type.
+═══════════════════════════════════════════════════════════════════════
+`;
+
+      // Build user message with question and document context only
+      // Adaptive instructions will be passed as system context to ensure strict compliance with database system prompt
+      finalPrompt = `${storedQuestion}
+
+${useFullDocument ? 'COMPLETE DOCUMENT CONTENT:' : 'RELEVANT DOCUMENT SECTIONS:'}
+${documentContext}`;
+      
+      // Store adaptive instructions to pass as context parameter to askLLM
+      // This ensures database system prompt is used as primary, with our instructions as enhancement
+      const adaptiveSystemContext = adaptiveInstructions;
     }
 
     // ✅ CRITICAL: Append conversation history to the prompt
@@ -2632,10 +2990,104 @@ exports.chatWithDocument = async (req, res) => {
       // Continue without profile context - don't fail the request
     }
 
+    // ---------- CONTEXT SIZE VALIDATION ----------
+    const estimatedPromptTokens = Math.ceil(finalPrompt.length / CHARS_PER_TOKEN);
+    const MODEL_CONTEXT_LIMITS = {
+      'gemini': 1000000,      // Gemini 1.5 Pro has 1M context
+      'gemini-pro-2.5': 2000000, // Gemini 2.5 Pro has 2M context
+      'gemini-3-pro': 1000000,   // Gemini 3.0 Pro has 1M context
+      'claude-sonnet-4': 200000, // Claude Sonnet 4 has 200K context
+      'claude-opus-4-1': 200000, // Claude Opus 4.1 has 200K context
+      'claude-sonnet-4-5': 200000, // Claude Sonnet 4.5 has 200K context
+      'claude-haiku-4-5': 200000,  // Claude Haiku 4.5 has 200K context
+      'claude': 200000,        // Claude has 200K context
+      'anthropic': 200000,     // Anthropic has 200K context
+      'gpt-4o': 128000,        // GPT-4 Turbo has 128K context
+      'openai': 128000,        // OpenAI has 128K context
+      'default': 8000
+    };
+
+    const modelLimit = MODEL_CONTEXT_LIMITS[provider] || MODEL_CONTEXT_LIMITS['default'];
+    const safeLimit = Math.floor(modelLimit * 0.8); // Use 80% of limit for safety
+
+    if (estimatedPromptTokens > safeLimit) {
+      console.warn(`⚠️ Prompt is ${estimatedPromptTokens} tokens, which exceeds safe limit ${safeLimit} for ${provider}`);
+      
+      if (useFullDocument && !used_secret_prompt) {
+        // Fallback: Switch to targeted mode if full document exceeds limits
+        console.log(`⚠️ Falling back to targeted mode due to context size`);
+        useFullDocument = false;
+        
+        // Re-run chunk selection with targeted mode
+        const questionEmbedding = await generateEmbedding(storedQuestion);
+        const fallbackRankedChunks = await ChunkVectorModel.findNearestChunks(
+          questionEmbedding,
+          10,
+          file_id
+        );
+        
+        // Re-select chunks within budget
+        const fallbackSelectedChunks = fallbackRankedChunks.slice(0, 10);
+        usedChunkIds = fallbackSelectedChunks.map(c => c.chunk_id || c.id);
+        
+        // Rebuild prompt with smaller context
+        const fallbackDocumentContext = fallbackSelectedChunks
+          .map((c, idx) => {
+            const similarity = c.similarity || c.distance || 0;
+            const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+            return `--- Chunk ${idx + 1} | Relevance: ${(score * 100).toFixed(1)}% ---\n${c.content || ''}`;
+          })
+          .join('\n\n');
+        
+        finalPrompt = `${storedQuestion}\n\n=== RELEVANT CONTEXT ===\n${fallbackDocumentContext}`;
+        
+        // Re-append conversation history
+        finalPrompt = appendConversationToPrompt(finalPrompt, conversationContext);
+        
+        // Re-append profile context if it was added
+        try {
+          const isProfileQuestion = /(my|my own|my personal|my professional|give me|show me|tell me about|what is|what are).*(profile|professional|legal|credentials|bar|jurisdiction|practice|role|experience|details)/i.test(storedQuestion);
+          let profileContext;
+          if (isProfileQuestion) {
+            profileContext = await UserProfileService.getDetailedProfileContext(userId, req.headers.authorization);
+            if (!profileContext) {
+              profileContext = await UserProfileService.getProfileContext(userId, req.headers.authorization);
+            }
+          } else {
+            profileContext = await UserProfileService.getProfileContext(userId, req.headers.authorization);
+          }
+          
+          if (profileContext) {
+            finalPrompt = `${profileContext}\n\nUSER QUESTION:\n${finalPrompt}`;
+          }
+        } catch (profileError) {
+          console.warn(`⚠️ Failed to re-add profile context in fallback mode`);
+        }
+        
+        const newEstimatedTokens = Math.ceil(finalPrompt.length / CHARS_PER_TOKEN);
+        console.log(`✅ Fallback prompt: ${newEstimatedTokens} tokens (${((newEstimatedTokens/modelLimit)*100).toFixed(1)}% of model limit)`);
+      } else {
+        // For secret prompts or targeted mode, just truncate the prompt
+        console.log(`⚠️ Truncating prompt to fit within model limits`);
+        const maxChars = safeLimit * CHARS_PER_TOKEN;
+        if (finalPrompt.length > maxChars) {
+          finalPrompt = finalPrompt.substring(0, maxChars - 200) + '\n\n[Content truncated due to context size limits...]';
+          const truncatedTokens = Math.ceil(finalPrompt.length / CHARS_PER_TOKEN);
+          console.log(`✅ Truncated prompt: ${truncatedTokens} tokens (${((truncatedTokens/modelLimit)*100).toFixed(1)}% of model limit)`);
+        }
+      }
+    } else {
+      console.log(`📝 Final prompt: ${estimatedPromptTokens} tokens (${((estimatedPromptTokens/modelLimit)*100).toFixed(1)}% of model limit)`);
+    }
+
     // ---------- CALL LLM ----------
     console.log(`[chatWithDocument] Calling LLM provider: ${provider} | Chunks used: ${usedChunkIds.length}`);
+    if (adaptiveSystemContext) {
+      console.log(`[chatWithDocument] ✅ Passing adaptive system context (${adaptiveSystemContext.length} chars) to be combined with database system prompt`);
+    }
+    // Pass adaptive system context as the context parameter so it gets combined with database system prompt
     // Pass the original user question separately so web search only uses that, not the full prompt
-    const answer = await askLLM(provider, finalPrompt, '', '', storedQuestion);
+    const answer = await askLLM(provider, finalPrompt, adaptiveSystemContext || '', '', storedQuestion);
 
     if (!answer?.trim()) {
       return res.status(500).json({ error: 'Empty response from AI.' });

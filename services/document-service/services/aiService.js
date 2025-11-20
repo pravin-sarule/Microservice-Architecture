@@ -1598,6 +1598,83 @@ function shouldTriggerWebSearch(userMessage, context = '', relevantChunks = '') 
   // Check if there's substantial document context provided
   const hasDocumentContext = (contextLower.length > 500) || (chunksLower.length > 500);
   
+  // ============================================
+  // CRITICAL: Check for explicit document rejection (MUST check BEFORE document context check)
+  // ============================================
+  const documentRejectionKeywords = [
+    // English phrases
+    "don't want from document",
+    "don't want from the document",
+    "don't want answer from document",
+    "don't want answer from the document",
+    "not from document",
+    "not from the document",
+    "not from documents",
+    "not from these documents",
+    "don't use document",
+    "don't use the document",
+    "ignore document",
+    "ignore the document",
+    "ignore documents",
+    "skip document",
+    "skip the document",
+    "without document",
+    "without documents",
+    "not in document",
+    "not in the document",
+    "i don't want",
+    "i dont want",
+    "don't want",
+    "dont want",
+    // Hinglish phrases
+    "web se search karo",
+    "web pe search karo",
+    "web me search karo",
+    "online search karo",
+    "internet se search karo",
+    "google se search karo",
+    "web par search",
+    "web pe search",
+    "online search",
+    "internet search",
+    "web search karo",
+    "web me dhoondo",
+    "web pe dhoondo",
+    "online dhoondo",
+    "internet se dhoondo",
+    "web se dekh",
+    "web pe dekh",
+    "online dekh",
+    "internet se dekh",
+  ];
+  
+  // Check for document rejection - match keywords (case-insensitive, word boundaries for phrases)
+  const hasDocumentRejection = documentRejectionKeywords.some(keyword => {
+    const lowerKeyword = keyword.toLowerCase();
+    // For short phrases, use simple includes
+    if (lowerKeyword.length <= 5) {
+      return message.includes(lowerKeyword);
+    }
+    // For longer phrases, check if all words are present (to handle variations like "i dont want the answer from the document")
+    const keywordWords = lowerKeyword.split(/\s+/).filter(w => w.length > 2); // Skip small words
+    if (keywordWords.length > 2) {
+      return keywordWords.every(word => message.includes(word));
+    }
+    // Fallback to simple includes
+    return message.includes(lowerKeyword);
+  });
+  
+  // Also check for common patterns like "don't want" + "document" anywhere in the message
+  const hasDontWant = (message.includes("don't want") || message.includes("dont want") || message.includes("don't want") || message.includes("do not want")) && 
+                      (message.includes("document") || message.includes("from document"));
+  
+  // If user explicitly rejects documents, ALWAYS trigger web search
+  if (hasDocumentRejection || hasDontWant) {
+    console.log('[Web Search] ✅ User explicitly rejected documents - ALWAYS triggering web search');
+    console.log(`[Web Search] Matched rejection pattern: ${hasDocumentRejection ? 'keyword match' : 'pattern match (dont want + document)'}`);
+    return true;
+  }
+  
   // Keywords that explicitly request web search (ALWAYS trigger, even with document context)
   const explicitWebSearchTriggers = [
     'search for',
@@ -1622,10 +1699,24 @@ function shouldTriggerWebSearch(userMessage, context = '', relevantChunks = '') 
     'search google',
     'use web search',
     'use web',
+    'search web',  // Added for Hinglish "search web" requests
     'check online',
     'check the web',
     'get from web',
     'get from internet',
+    // Hinglish triggers
+    'web se',
+    'web pe',
+    'web me',
+    'online search',
+    'internet se',
+    'google se',
+    'web par',
+    'web pe search',
+    'online dhoondo',
+    'internet se dhoondo',
+    'web se dekh',
+    'web pe dekh',
   ];
   
   // Keywords that suggest need for CURRENT/REAL-TIME information (not in documents)
@@ -2103,64 +2194,148 @@ async function askLLM(providerName, userMessage, context = '', relevant_chunks =
     }
   }
 
-  // Large input handling
-  const trimmedContext = trimContext(safeContext, 20000);
-  const filteredChunks = filterRelevantChunks(relevant_chunks, userQuestionForSearch, 12);
-  const trimmedChunks = trimContext(filteredChunks, 20000);
+  // Check if this is an EXPLICIT web/internet request BEFORE processing context
+  const messageLower = userQuestionForSearch.toLowerCase();
+  const explicitWebKeywords = [
+    'search web', 'search online', 'search the web', 'search internet', 'from web', 'from the web',
+    'from internet', 'from online', 'web se', 'web pe', 'online search', 'internet search', 'web search',
+    'don\'t want from document', 'dont want from document', 'not from document', 'ignore document', 'skip document',
+    'answer from web', 'give me from web', 'tell me from web', 'web se search', 'web pe search',
+    'search on web', 'search on internet', 'find on web', 'find on internet', 'look up on web',
+    'web se dhoondo', 'web pe dhoondo', 'internet se', 'online dhoondo', 'web se batao'
+  ];
+  const isExplicitWebRequest = explicitWebKeywords.some(keyword => messageLower.includes(keyword));
+  
+  // If explicit web request, MINIMIZE document context
+  let trimmedContext, filteredChunks, trimmedChunks;
+  if (isExplicitWebRequest) {
+    // Minimize document context for explicit web requests
+    console.log('[Web Search] 🎯 Explicit web request detected - minimizing document context');
+    trimmedContext = ''; // Don't include profile context for explicit web requests
+    filteredChunks = ''; // Don't include document chunks for explicit web requests
+    trimmedChunks = ''; // No document context
+  } else {
+    // Normal processing: large input handling
+    trimmedContext = trimContext(safeContext, 20000);
+    filteredChunks = filterRelevantChunks(relevant_chunks, userQuestionForSearch, 12);
+    trimmedChunks = trimContext(filteredChunks, 20000);
+  }
 
   // Check if web search is needed
   let webSearchData = null;
   let citations = [];
   let sourceInfo = [];
   
-  // Determine what sources are available
-  if (trimmedChunks) {
-    sourceInfo.push('📄 Uploaded Documents');
-  }
-  if (trimmedContext) {
-    sourceInfo.push('📋 User Profile/Context');
+  // Determine what sources are available (only if not explicit web request)
+  if (!isExplicitWebRequest) {
+    if (trimmedChunks) {
+      sourceInfo.push('📄 Uploaded Documents');
+    }
+    if (trimmedContext) {
+      sourceInfo.push('📋 User Profile/Context');
+    }
   }
   
-  // Check if web search is needed based on question and available document context
-  if (shouldTriggerWebSearch(userQuestionForSearch, trimmedContext, trimmedChunks)) {
-    console.log('[Web Search] 🔍 Auto-triggering web search for user question:', userQuestionForSearch.substring(0, 100));
+  // ✅ WEB SEARCH: Provider-agnostic - works for ALL LLM models (Gemini, Claude, OpenAI, DeepSeek)
+  // Web search is called BEFORE provider-specific LLM calls, so all models receive web search results
+  const needsWebSearch = isExplicitWebRequest || shouldTriggerWebSearch(userQuestionForSearch, trimmedContext, trimmedChunks);
+  if (needsWebSearch) {
+    console.log(`[Web Search] 🔍 ${isExplicitWebRequest ? 'EXPLICIT' : 'Auto'}-triggering web search for user question:`, userQuestionForSearch.substring(0, 100));
+    console.log(`[Web Search] 📋 Provider: ${provider} - Web search will be available for this model`);
     webSearchData = await performWebSearch(userQuestionForSearch, 5);
     
     if (webSearchData && webSearchData.results) {
       citations = webSearchData.citations;
       sourceInfo.push('🌐 Web Search');
-      console.log(`[Web Search] ✅ Found ${citations.length} search results with citations`);
+      console.log(`[Web Search] ✅ Found ${citations.length} search results with citations for provider ${provider}`);
+      console.log(`[Web Search] ✅ Web search results will be included in prompt for ${provider} model`);
     } else {
-      console.log('[Web Search] ⚠️ No search results found');
+      console.log(`[Web Search] ⚠️ No search results found for provider ${provider}`);
     }
+  } else {
+    console.log(`[Web Search] ⏭️ Web search not needed for provider ${provider}`);
   }
 
-  // Build prompt with clear source attribution
+  // Build prompt with prioritized sources based on request type
   let prompt = userMessage.trim();
   
-  // Add document chunks if available
-  if (trimmedChunks) {
-    prompt += `\n\n=== UPLOADED DOCUMENTS CONTEXT ===\n${trimmedChunks}`;
-  }
-  
-  // Add web search results if available
-  if (webSearchData && webSearchData.results) {
-    prompt += `\n\n=== WEB SEARCH RESULTS ===\n${webSearchData.results}\n\n⚠️ IMPORTANT: When using information from web sources above, cite them as [Source 1], [Source 2], etc.`;
-  }
-  
-  // Add instruction about source attribution
-  if (sourceInfo.length > 0) {
-    prompt += `\n\n📌 Available Information Sources: ${sourceInfo.join(', ')}`;
-    prompt += `\n\n🎯 Instructions: 
+  // ⚠️ CRITICAL: If explicit web search is requested, prioritize web sources and minimize documents
+  if (isExplicitWebRequest && webSearchData && webSearchData.results) {
+    console.log('[Web Search] 🎯 EXPLICIT web search request - prioritizing web sources over documents');
+    
+    // Add web search results FIRST (highest priority)
+    prompt += `\n\n=== PRIMARY SOURCE: WEB SEARCH RESULTS ===\n${webSearchData.results}`;
+    prompt += `\n\n⚠️ CRITICAL: These web search results are the PRIMARY source for your answer. Use them as the main source.`;
+    
+    // Add document context LAST (secondary/optional reference only)
+    if (trimmedChunks) {
+      prompt += `\n\n=== SECONDARY REFERENCE: UPLOADED DOCUMENTS (OPTIONAL) ===\n${trimmedChunks}`;
+      prompt += `\n\n⚠️ NOTE: The user explicitly requested web/internet information. Use documents ONLY for additional context if needed, but PRIMARY source must be web search results.`;
+    }
+    
+    // Explicit instructions for web-first response
+    prompt += `\n\n🎯 CRITICAL INSTRUCTIONS:
+- The user EXPLICITLY requested information from the INTERNET/WEB
+- You MUST prioritize and use WEB SEARCH RESULTS as your PRIMARY source
+- Use document context ONLY as secondary reference if absolutely necessary
+- Start your answer with: "According to web search results..." or "Based on information from the internet..."
+- Cite sources as [Source 1], [Source 2], etc.
+- DO NOT rely primarily on documents when the user asked for web/internet information`;
+    
+  } else {
+    // Normal mode: documents first, then web sources
+    // Add document chunks if available
+    if (trimmedChunks) {
+      prompt += `\n\n=== UPLOADED DOCUMENTS CONTEXT ===\n${trimmedChunks}`;
+    }
+    
+    // Add web search results if available
+    if (webSearchData && webSearchData.results) {
+      prompt += `\n\n=== WEB SEARCH RESULTS ===\n${webSearchData.results}\n\n⚠️ IMPORTANT: When using information from web sources above, cite them as [Source 1], [Source 2], etc.`;
+    }
+    
+    // Add instruction about source attribution
+    if (sourceInfo.length > 0) {
+      prompt += `\n\n📌 Available Information Sources: ${sourceInfo.join(', ')}`;
+      prompt += `\n\n🎯 Instructions: 
 - Answer the question using the most relevant sources available.
 - Clearly indicate which source(s) you're using (e.g., "Based on your uploaded documents..." or "According to web search results..." or "From your profile...").
 - If using web search, cite sources as [Source 1], [Source 2], etc.
 - If information is not available in any source, clearly state that.`;
+    }
+  }
+
+  // Check if prompt contains comprehensive analysis instructions (from adaptive RAG)
+  const hasComprehensiveInstructions = prompt.includes('COMPREHENSIVE (Full Document)') || 
+                                       prompt.includes('COMPLETE DOCUMENT CONTENT') ||
+                                       prompt.includes('Now provide your comprehensive analysis:');
+
+  // Reinforce extraction instructions if comprehensive analysis is requested
+  if (hasComprehensiveInstructions) {
+    const reinforcementInstructions = `
+
+CRITICAL REMINDER - You MUST:
+✓ Follow the structure specified above
+✓ Extract ALL details mentioned (dates, names, amounts, etc.)
+✓ Use exact quotes for legal names and technical terms
+✓ Organize with clear headings and bullet points
+✓ Include page references when available
+✓ State "NOT MENTIONED IN DOCUMENT" if information is missing
+✓ Be comprehensive - don't skip important details
+
+Begin your analysis now:`;
+    
+    prompt += reinforcementInstructions;
+    console.log('[askLLM] ✅ Added reinforcement instructions for comprehensive analysis');
   }
 
   const totalTokens = estimateTokenCount(prompt + trimmedContext);
   console.log(`[askLLM] Total tokens estimated: ${totalTokens} | Sources: ${sourceInfo.join(', ')}`);
 
+  // ✅ Call LLM - Web search results are already included in the prompt above
+  // This works for ALL providers: Gemini, Claude, OpenAI, DeepSeek
+  // The prompt contains web search results, so all models receive them regardless of provider
+  console.log(`[askLLM] 📤 Sending request to ${provider} with ${webSearchData ? 'WEB SEARCH RESULTS' : 'NO web search'}`);
   const response = await retryWithBackoff(() =>
     callSinglePrompt(provider, prompt, trimmedContext)
   );
@@ -2182,19 +2357,26 @@ async function getSystemPrompt(context = '') {
   try {
     const dbSystemPrompt = await SystemPrompt.getLatestSystemPrompt();
     
-    // Combine database system prompt with context if both exist
+    // STRICT COMPLIANCE: Database system prompt takes PRECEDENCE
+    // Adaptive context is added as ENHANCEMENT, not replacement
     if (dbSystemPrompt && context) {
-      console.log('[SystemPrompt] 🔄 Using database system prompt + context for system instruction');
-      return `${dbSystemPrompt}\n\n${context}`;
+      // Database prompt first (PRIMARY), then adaptive context (ENHANCEMENT)
+      const combinedPrompt = `${dbSystemPrompt}
+
+${context}`;
+      console.log('[SystemPrompt] 🔄 Using database system prompt (PRIMARY) + adaptive context (ENHANCEMENT)');
+      console.log(`[SystemPrompt] Database prompt length: ${dbSystemPrompt.length} chars | Adaptive context: ${context.length} chars`);
+      return combinedPrompt;
     }
     
-    // Use database system prompt if available
+    // Use database system prompt if available (STRICT COMPLIANCE)
     if (dbSystemPrompt) {
-      console.log('[SystemPrompt] ✅ Using system prompt from database for system instruction');
+      console.log('[SystemPrompt] ✅ Using system prompt from database (STRICT COMPLIANCE MODE)');
+      console.log(`[SystemPrompt] Database prompt length: ${dbSystemPrompt.length} chars`);
       return dbSystemPrompt;
     }
     
-    // Fallback to context or default
+    // Fallback to context or default (only if no database prompt exists)
     console.log('[SystemPrompt] ⚠️ No database prompt found, using fallback system instruction');
     return context || 'You are a helpful legal AI assistant.';
   } catch (err) {
@@ -2205,6 +2387,9 @@ async function getSystemPrompt(context = '') {
 
 // ---------------------------
 // Core API Caller
+// ✅ NOTE: Web search results are already included in the 'prompt' parameter
+// This function handles ALL providers (Gemini, Claude, OpenAI, DeepSeek)
+// All providers receive the same prompt which includes web search results when available
 // ---------------------------
 async function callSinglePrompt(provider, prompt, context = '') {
   const config = LLM_CONFIGS[provider];
@@ -2213,7 +2398,11 @@ async function callSinglePrompt(provider, prompt, context = '') {
 
   // Get system prompt from database
   const systemPrompt = await getSystemPrompt(context);
-  console.log(`[SystemPrompt] 📝 Applying system instruction for ${provider} (length: ${systemPrompt.length} chars)`);
+  const hasWebSearchInPrompt = prompt.includes('WEB SEARCH RESULTS') || prompt.includes('Web Search Results');
+  console.log(`[SystemPrompt] 📝 Applying system instruction for ${provider} (length: ${systemPrompt.length} chars)${hasWebSearchInPrompt ? ' [WITH WEB SEARCH DATA IN PROMPT]' : ''}`);
+  if (hasWebSearchInPrompt) {
+    console.log(`[Web Search] ✅ ${provider} model will receive web search results in prompt`);
+  }
 
   // ---- Gemini ----
   if (isGemini) {
@@ -2230,40 +2419,88 @@ async function callSinglePrompt(provider, prompt, context = '') {
           // Use new SDK for Gemini 3.0 Pro
           console.log(`[SystemPrompt] 🎯 Gemini 3.0 Pro ${modelName} using new SDK`);
           
-          // Build request for new SDK
-          const requestPayload = {
-            model: modelName,
-            contents: [
-              {
-                role: 'user',
-                parts: [{ text: prompt }]
-              }
-            ],
-            systemInstruction: {
-              parts: [{ text: systemPrompt }]
-            },
-            generationConfig: {
-              maxOutputTokens,
-              temperature: 0.7,
+          try {
+            // ✅ VALIDATION: Check request size before sending
+            // Gemini 3.0 Pro has ~1M token context (4M chars), but API requests have practical limits
+            const totalRequestSize = prompt.length + (systemPrompt?.length || 0);
+            const maxSafeRequestSize = 3000000; // ~750K tokens (75% of 1M for safety)
+            
+            let finalPrompt = prompt;
+            let finalSystemPrompt = systemPrompt;
+            
+            if (totalRequestSize > maxSafeRequestSize) {
+              console.warn(`[Gemini 3.0 Pro] ⚠️ Request size (${totalRequestSize} chars) exceeds safe limit (${maxSafeRequestSize} chars). Truncating...`);
+              // Truncate prompt to fit within safe limit, keeping 90% for prompt and 10% buffer for system prompt
+              const maxPromptSize = Math.floor(maxSafeRequestSize * 0.9);
+              const truncatedPrompt = prompt.substring(0, maxPromptSize);
+              finalPrompt = truncatedPrompt + '\n\n[...content truncated due to size limits...]';
+              console.log(`[Gemini 3.0 Pro] 📉 Truncated prompt from ${prompt.length} to ${finalPrompt.length} chars`);
             }
-          };
-          
-          const response = await genAI3.models.generateContent(requestPayload);
-          
-          // Extract text from response
-          const text = response.text || 
-                      response.candidates?.[0]?.content?.parts?.[0]?.text || 
-                      response.response?.text() || '';
-          
-          if (!text) {
-            throw new Error('No text returned from Gemini 3.0 Pro');
+            
+            // Build request for new SDK
+            const requestPayload = {
+              model: modelName,
+              contents: [
+                {
+                  role: 'user',
+                  parts: [{ text: finalPrompt }]
+                }
+              ],
+              systemInstruction: finalSystemPrompt ? {
+                parts: [{ text: finalSystemPrompt }]
+              } : undefined,
+              generationConfig: {
+                maxOutputTokens,
+                temperature: 0.7,
+              }
+            };
+            
+            console.log(`[Gemini 3.0 Pro] 🚀 Sending request with ${finalPrompt.length} chars prompt and ${(finalSystemPrompt?.length || 0)} chars system instruction`);
+            
+            // Add timeout wrapper for the request
+            const requestPromise = genAI3.models.generateContent(requestPayload);
+            const timeoutPromise = new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Request timeout: Gemini 3.0 Pro API request took too long')), 180000) // 3 minute timeout
+            );
+            
+            const response = await Promise.race([requestPromise, timeoutPromise]);
+            
+            // Extract text from response
+            const text = response.text || 
+                        response.candidates?.[0]?.content?.parts?.[0]?.text || 
+                        response.response?.text() || '';
+            
+            if (!text) {
+              throw new Error('No text returned from Gemini 3.0 Pro');
+            }
+            
+            const usage = response.usageMetadata || {};
+            console.log(
+              `✅ Gemini 3.0 Pro (${modelName}) - Tokens used: ${usage.promptTokenCount || 0} + ${usage.candidatesTokenCount || 0} | max=${maxOutputTokens}`
+            );
+            return text;
+          } catch (gemini3Error) {
+            // Check if it's a fetch/network error
+            const isNetworkError = gemini3Error.message?.includes('fetch failed') || 
+                                  gemini3Error.message?.includes('network') ||
+                                  gemini3Error.message?.includes('timeout') ||
+                                  gemini3Error.message?.includes('ECONNREFUSED') ||
+                                  gemini3Error.message?.includes('ETIMEDOUT');
+            
+            if (isNetworkError) {
+              console.error(`[Gemini 3.0 Pro] ❌ Network/Request error: ${gemini3Error.message}`);
+              console.log(`[Gemini 3.0 Pro] ⚠️ Attempting fallback to legacy Gemini models...`);
+              // Don't throw - let it fall through to legacy models
+              throw new Error(`Gemini 3.0 Pro network error - will try legacy models: ${gemini3Error.message}`);
+            } else {
+              console.error(`[Gemini 3.0 Pro] ❌ Error details:`, {
+                message: gemini3Error.message,
+                stack: gemini3Error.stack,
+                response: gemini3Error.response?.data
+              });
+              throw gemini3Error;
+            }
           }
-          
-          const usage = response.usageMetadata || {};
-          console.log(
-            `✅ Gemini 3.0 Pro (${modelName}) - Tokens used: ${usage.promptTokenCount || 0} + ${usage.candidatesTokenCount || 0} | max=${maxOutputTokens}`
-          );
-          return text;
         } else {
           // Use old SDK for legacy Gemini models
           console.log(`[SystemPrompt] 🎯 Gemini ${modelName} using legacy SDK with systemInstruction from database`);

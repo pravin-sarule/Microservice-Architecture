@@ -2909,6 +2909,208 @@ exports.getFolderSummary = async (req, res) => {
 //   }
 // };
 
+/**
+ * Analyzes user query to determine if it needs full document or targeted search (Folder version)
+ * @param {string} question - The user's question/query
+ * @returns {Object} Analysis result with strategy, threshold, and reason
+ */
+function analyzeQueryIntent(question) {
+  if (!question || typeof question !== 'string') {
+    return {
+      needsFullDocument: false,
+      threshold: 0.75,
+      strategy: 'TARGETED_RAG',
+      reason: 'Invalid query - defaulting to targeted search'
+    };
+  }
+
+  const queryLower = question.toLowerCase();
+  
+  // Keywords that indicate need for FULL DOCUMENT analysis
+  const fullDocumentKeywords = [
+    'summary', 'summarize', 'overview', 'complete', 'entire', 'all',
+    'comprehensive', 'detailed analysis', 'full details', 'everything',
+    'list all', 'what are all', 'give me all', 'extract all',
+    'analyze', 'review', 'examine', 'timeline', 'chronology',
+    'what is this document', 'what does this document', 'document about',
+    'key points', 'main points', 'important information',
+    'case details', 'petition details', 'contract terms',
+    'parties involved', 'background', 'history'
+  ];
+  
+  // Keywords that indicate TARGETED search is okay
+  const targetedKeywords = [
+    'specific section', 'find where', 'locate', 'search for',
+    'what does it say about', 'mention of', 'reference to',
+    'clause', 'paragraph', 'page', 'section'
+  ];
+  
+  // Check for full document indicators
+  const needsFullDoc = fullDocumentKeywords.some(keyword => 
+    queryLower.includes(keyword)
+  );
+  
+  // Check for targeted search indicators
+  const isTargeted = targetedKeywords.some(keyword => 
+    queryLower.includes(keyword)
+  );
+  
+  // Special handling for short questions (usually broad)
+  const isShortQuestion = question.trim().split(' ').length <= 5;
+  
+  // Questions asking "what/who/when/where/why/how" with no specific target
+  const isBroadQuestion = /^(what|who|when|where|why|how)\s/i.test(queryLower) && 
+                          !isTargeted;
+  
+  return {
+    needsFullDocument: needsFullDoc || (isBroadQuestion && !isTargeted) || isShortQuestion,
+    threshold: needsFullDoc ? 0.0 : (isTargeted ? 0.80 : 0.75),
+    strategy: needsFullDoc ? 'FULL_DOCUMENT' : 'TARGETED_RAG',
+    reason: needsFullDoc ? 'Query requires comprehensive analysis' : 'Query is specific/targeted'
+  };
+}
+
+/**
+ * Intelligently selects representative chunks from each file for comprehensive analysis
+ * while staying within token limits
+ * @param {Array} allChunks - All chunks from all files
+ * @param {Array} files - Array of file objects
+ * @param {number} maxContextChars - Maximum context size in characters
+ * @returns {Array} Selected representative chunks
+ */
+function selectRepresentativeChunks(allChunks, files, maxContextChars) {
+  if (!allChunks || allChunks.length === 0) return [];
+  
+  // Group chunks by file
+  const chunksByFile = {};
+  for (const chunk of allChunks) {
+    const fileId = chunk.file_id || chunk.filename || 'unknown';
+    if (!chunksByFile[fileId]) {
+      chunksByFile[fileId] = [];
+    }
+    chunksByFile[fileId].push(chunk);
+  }
+  
+  // Calculate target chunks per file to ensure representation from all files
+  const fileCount = Object.keys(chunksByFile).length;
+  const targetCharsPerFile = Math.floor(maxContextChars / fileCount);
+  
+  const selectedChunks = [];
+  let totalChars = 0;
+  
+  // Select representative chunks from each file
+  for (const fileId in chunksByFile) {
+    const fileChunks = chunksByFile[fileId].sort((a, b) => (a.chunk_index || 0) - (b.chunk_index || 0));
+    const totalFileChars = fileChunks.reduce((sum, c) => sum + ((c.content || '').length || 0), 0);
+    
+    if (totalFileChars <= targetCharsPerFile) {
+      // File fits entirely - include all chunks
+      selectedChunks.push(...fileChunks);
+      totalChars += totalFileChars;
+    } else {
+      // File is too large - select representative chunks
+      // Strategy: Include first, middle, and last chunks + evenly spaced chunks
+      const targetChunks = Math.max(5, Math.floor((targetCharsPerFile / totalFileChars) * fileChunks.length));
+      
+      if (targetChunks >= fileChunks.length) {
+        // Include all if we have space
+        selectedChunks.push(...fileChunks);
+        totalChars += totalFileChars;
+      } else {
+        // Select representative chunks
+        const step = Math.floor(fileChunks.length / targetChunks);
+        const selected = [];
+        
+        // Always include first chunk
+        selected.push(fileChunks[0]);
+        
+        // Include evenly spaced chunks from middle
+        for (let i = step; i < fileChunks.length - 1; i += step) {
+          if (selected.length < targetChunks - 1) {
+            selected.push(fileChunks[i]);
+          }
+        }
+        
+        // Always include last chunk if we have space
+        if (selected.length < targetChunks && fileChunks.length > 1) {
+          selected.push(fileChunks[fileChunks.length - 1]);
+        }
+        
+        // Sort by original index to maintain order
+        selected.sort((a, b) => (a.chunk_index || 0) - (b.chunk_index || 0));
+        
+        // Trim if still too large
+        let fileChars = 0;
+        const trimmedSelected = [];
+        for (const chunk of selected) {
+          const chunkLength = (chunk.content || '').length;
+          if (fileChars + chunkLength <= targetCharsPerFile) {
+            trimmedSelected.push(chunk);
+            fileChars += chunkLength;
+          } else {
+            // Truncate last chunk to fit
+            const remaining = targetCharsPerFile - fileChars;
+            if (remaining > 500) {
+              trimmedSelected.push({
+                ...chunk,
+                content: (chunk.content || '').substring(0, remaining - 100) + '...[continued in full document]'
+              });
+            }
+            break;
+          }
+        }
+        
+        selectedChunks.push(...trimmedSelected);
+        totalChars += fileChars;
+      }
+    }
+    
+    // Check if we've exceeded total limit
+    if (totalChars >= maxContextChars) {
+      break;
+    }
+  }
+  
+  // Final sort by file and chunk index
+  selectedChunks.sort((a, b) => {
+    if ((a.filename || '') !== (b.filename || '')) {
+      return (a.filename || '').localeCompare(b.filename || '');
+    }
+    return (a.chunk_index || 0) - (b.chunk_index || 0);
+  });
+  
+  return selectedChunks;
+}
+
+/**
+ * Checks if a question is a metadata query that should be answered directly without RAG
+ * @param {string} question - The user's question
+ * @returns {Object|null} Metadata query info or null if not a metadata query
+ */
+function isMetadataQuery(question) {
+  if (!question || typeof question !== 'string') return null;
+  
+  const queryLower = question.toLowerCase();
+  
+  // Patterns for metadata queries
+  const metadataPatterns = [
+    { pattern: /how many (file|document|doc|pdf|docx)/i, type: 'file_count' },
+    { pattern: /(count|number|total).*(file|document|doc)/i, type: 'file_count' },
+    { pattern: /how many.*in.*(case|project|folder)/i, type: 'file_count' },
+    { pattern: /(list|show|what are).*(all|the).*(file|document)/i, type: 'file_list' },
+    { pattern: /(file|document).*(name|title|list)/i, type: 'file_list' },
+    { pattern: /what.*(file|document).*in.*(case|project|folder)/i, type: 'file_list' },
+  ];
+  
+  for (const { pattern, type } of metadataPatterns) {
+    if (pattern.test(queryLower)) {
+      return { type, question: queryLower };
+    }
+  }
+  
+  return null;
+}
+
 exports.queryFolderDocuments = async (req, res) => {
   let chatCost;
   let userId = req.user.id;
@@ -2961,6 +3163,91 @@ exports.queryFolderDocuments = async (req, res) => {
 
     console.log(`📄 Found ${files.length} processed files in folder "${folderName}"`);
 
+    // 2.25️⃣ Check if this is a metadata query (file count, file list, etc.)
+    if (question && !used_secret_prompt) {
+      const metadataQuery = isMetadataQuery(question);
+      if (metadataQuery) {
+        console.log(`📊 Detected metadata query: ${metadataQuery.type}`);
+        
+        if (metadataQuery.type === 'file_count') {
+          const answer = `There are **${files.length}** processed file(s) in the "${folderName}" folder/case project.`;
+          
+          // Save the chat
+          const savedChat = await FolderChat.saveFolderChat(
+            userId,
+            folderName,
+            question,
+            answer,
+            finalSessionId,
+            files.map((f) => f.id),
+            [],
+            false,
+            null,
+            null,
+            []
+          );
+          
+          return res.json({
+            success: true,
+            session_id: savedChat.session_id,
+            answer,
+            response: answer,
+            llm_provider: 'metadata',
+            used_secret_prompt: false,
+            prompt_label: null,
+            secret_id: null,
+            used_chunk_ids: [],
+            files_queried: files.map((f) => f.originalname),
+            total_files: files.length,
+            chunks_used: 0,
+            timestamp: new Date().toISOString(),
+            displayQuestion: question,
+            storedQuestion: question,
+            chat_history: [],
+            metadata_query: true
+          });
+        } else if (metadataQuery.type === 'file_list') {
+          const fileList = files.map((f, idx) => `${idx + 1}. ${f.originalname}`).join('\n');
+          const answer = `Files in the "${folderName}" folder/case project:\n\n${fileList}\n\n**Total: ${files.length} file(s)**`;
+          
+          // Save the chat
+          const savedChat = await FolderChat.saveFolderChat(
+            userId,
+            folderName,
+            question,
+            answer,
+            finalSessionId,
+            files.map((f) => f.id),
+            [],
+            false,
+            null,
+            null,
+            []
+          );
+          
+          return res.json({
+            success: true,
+            session_id: savedChat.session_id,
+            answer,
+            response: answer,
+            llm_provider: 'metadata',
+            used_secret_prompt: false,
+            prompt_label: null,
+            secret_id: null,
+            used_chunk_ids: [],
+            files_queried: files.map((f) => f.originalname),
+            total_files: files.length,
+            chunks_used: 0,
+            timestamp: new Date().toISOString(),
+            displayQuestion: question,
+            storedQuestion: question,
+            chat_history: [],
+            metadata_query: true
+          });
+        }
+      }
+    }
+
     // 2.5️⃣ Fetch case data once for this folder (if available)
     const caseData = await fetchCaseDataForFolder(userId, folderName);
     const caseContext = caseData ? formatCaseDataAsContext(caseData) : '';
@@ -2989,13 +3276,66 @@ exports.queryFolderDocuments = async (req, res) => {
       console.log('[queryFolderDocuments] No prior context for this session.');
     }
 
-    // 3️⃣ ✅ RAG Configuration
-    const SIMILARITY_THRESHOLD = 0.75; // Cosine similarity cutoff
-    const MIN_CHUNKS = 5; // Minimum chunks to retrieve
-    const MAX_CHUNKS = 10; // Maximum chunks to retrieve
-    const MAX_CONTEXT_TOKENS = 4000; // ~15% of most model limits (e.g., 32k * 0.15 ≈ 4800)
-    const CHARS_PER_TOKEN = 4; // Average chars per token
-    const MAX_CONTEXT_CHARS = MAX_CONTEXT_TOKENS * CHARS_PER_TOKEN; // ~16,000 chars
+    // 3️⃣ ✅ ADAPTIVE RAG CONFIGURATION - Detects query type and adjusts strategy
+    // For custom questions, analyze the query intent
+    // For secret prompts, we'll analyze later in the secret prompt section
+    const questionToAnalyze = question?.trim() || '';
+    const queryAnalysis = analyzeQueryIntent(questionToAnalyze);
+
+    let SIMILARITY_THRESHOLD, MIN_CHUNKS, MAX_CHUNKS, MAX_CONTEXT_TOKENS, useFullDocument;
+    
+    // Provider-specific context limits (will be adjusted based on actual provider later)
+    const PROVIDER_CONTEXT_LIMITS = {
+      'gemini': 800000,      // Gemini 1.5 Pro: 1M tokens = ~4M chars, use 80%
+      'gemini-pro-2.5': 1600000, // Gemini 2.5 Pro: 2M tokens = ~8M chars, use 80%
+      'gemini-3-pro': 800000,    // Gemini 3.0 Pro: 1M tokens
+      'claude-sonnet-4': 120000, // Claude Sonnet 4: 200K tokens = ~800K chars, use 75% for safety
+      'claude-opus-4-1': 120000, // Claude Opus 4.1: 200K tokens
+      'claude-sonnet-4-5': 120000, // Claude Sonnet 4.5: 200K tokens
+      'claude-haiku-4-5': 120000,  // Claude Haiku 4.5: 200K tokens
+      'claude': 120000,        // Claude: 200K tokens
+      'anthropic': 120000,     // Anthropic: 200K tokens
+      'gpt-4o': 96000,         // GPT-4 Turbo: 128K tokens = ~512K chars, use 75%
+      'openai': 96000,         // OpenAI: 128K tokens
+      'default': 32000         // Default: 32K tokens = ~128K chars
+    };
+
+    if (queryAnalysis.needsFullDocument && !used_secret_prompt) {
+      // COMPREHENSIVE ANALYSIS MODE - Use intelligent chunk selection
+      console.log(`🔍 Query requires full document analysis: "${questionToAnalyze.substring(0, 100)}..."`);
+      useFullDocument = true;
+      MIN_CHUNKS = 20; // Minimum chunks from all files
+      MAX_CHUNKS = 500; // Maximum chunks (will be limited by context size)
+      // Will be adjusted based on provider, but start with reasonable default
+      MAX_CONTEXT_TOKENS = 25000; // ~100K chars (will be recalculated based on provider)
+      SIMILARITY_THRESHOLD = 0.0; // Accept all chunks initially
+    } else {
+      // TARGETED SEARCH MODE - Use semantic search
+      console.log(`🎯 Query is targeted, using RAG with threshold ${queryAnalysis.threshold}`);
+      useFullDocument = false;
+      SIMILARITY_THRESHOLD = queryAnalysis.threshold;
+      MIN_CHUNKS = 5;
+      MAX_CHUNKS = 10;
+      MAX_CONTEXT_TOKENS = 4000;
+    }
+
+    const CHARS_PER_TOKEN = 4;
+    let MAX_CONTEXT_CHARS = MAX_CONTEXT_TOKENS * CHARS_PER_TOKEN;
+
+    // Log query analysis results
+    console.log(`
+╔════════════════════════════════════════════════════════════════════
+║ 📊 QUERY ANALYSIS RESULTS (FOLDER)
+╠════════════════════════════════════════════════════════════════════
+║ Query: "${questionToAnalyze.substring(0, 100)}${questionToAnalyze.length > 100 ? '...' : ''}"
+║ Strategy: ${queryAnalysis.strategy}
+║ Reason: ${queryAnalysis.reason}
+║ Full Document Mode: ${useFullDocument ? '✅ YES' : '❌ NO'}
+║ Similarity Threshold: ${SIMILARITY_THRESHOLD}
+║ Max Chunks: ${MAX_CHUNKS}
+║ Max Context Tokens: ${MAX_CONTEXT_TOKENS}
+╚════════════════════════════════════════════════════════════════════
+`);
 
     // 4️⃣ Initialize variables
     let answer;
@@ -3005,6 +3345,7 @@ exports.queryFolderDocuments = async (req, res) => {
     let finalPromptLabel = prompt_label;
     let provider = "gemini";
     let llmContext = "";
+    let adaptiveSystemContext = ''; // Will store adaptive instructions to be combined with database system prompt
 
     // ================================
     // CASE 1: SECRET PROMPT
@@ -3048,24 +3389,81 @@ exports.queryFolderDocuments = async (req, res) => {
         return res.status(500).json({ error: "Secret value is empty." });
       }
 
-      // ✅ Vector search with similarity scoring
-      const questionEmbedding = await generateEmbedding(secretValue);
-      const allRelevantChunks = [];
+      // ✅ ADD: Analyze if secret prompt needs full document
+      const secretQueryAnalysis = analyzeQueryIntent(secretValue);
+      const useFullDocumentForSecret = secretQueryAnalysis.needsFullDocument;
 
-      for (const file of files) {
-        const relevant = await ChunkVector.findNearestChunksAcrossFiles(
-          questionEmbedding,
-          maxResults, // Retrieve top 10 candidates per file
-          [file.id]
-        );
-        if (relevant.length) {
-          allRelevantChunks.push(
-            ...relevant.map((r) => ({ 
-              ...r, 
-              filename: file.originalname,
-              similarity: r.similarity || r.distance || 0 // Ensure similarity score exists
-            }))
+      console.log(`🔐 Secret prompt analysis mode: ${useFullDocumentForSecret ? 'FULL DOCUMENT' : 'TARGETED'}`);
+      console.log(`🔐 Secret prompt strategy: ${secretQueryAnalysis.strategy} - ${secretQueryAnalysis.reason}`);
+
+      // ✅ Adjust MAX_CONTEXT_CHARS based on provider for secret prompts
+      const providerLimit = PROVIDER_CONTEXT_LIMITS[provider] || PROVIDER_CONTEXT_LIMITS['default'];
+      const maxContextForProvider = Math.floor(providerLimit * 0.75); // Use 75% for safety
+      if (useFullDocumentForSecret) {
+        MAX_CONTEXT_CHARS = maxContextForProvider;
+        MAX_CONTEXT_TOKENS = Math.floor(maxContextForProvider / CHARS_PER_TOKEN);
+        console.log(`📊 Adjusted MAX_CONTEXT_CHARS to ${MAX_CONTEXT_CHARS} chars (${MAX_CONTEXT_TOKENS} tokens) for provider ${provider}`);
+      }
+
+      let allRelevantChunks = [];
+
+      if (useFullDocumentForSecret) {
+        // GET ALL CHUNKS FROM ALL FILES - No embedding search needed
+        console.log(`📚 Fetching ALL chunks from ALL ${files.length} files for comprehensive analysis...`);
+        const FileChunk = require('../models/FileChunk');
+        
+        for (const file of files) {
+          const fileChunks = await FileChunk.getChunksByFileId(file.id);
+          if (fileChunks && fileChunks.length > 0) {
+            allRelevantChunks.push(
+              ...fileChunks.map((chunk) => ({
+                ...chunk,
+                file_id: file.id,
+                filename: file.originalname,
+                similarity: 1.0, // Mark as fully relevant
+                chunk_id: chunk.id,
+                distance: 0,
+                content: chunk.content
+              }))
+            );
+          }
+        }
+        
+        // Sort by file order, then chunk index to maintain document flow
+        allRelevantChunks.sort((a, b) => {
+          // First sort by filename to keep files together
+          if (a.filename !== b.filename) {
+            return a.filename.localeCompare(b.filename);
+          }
+          // Then sort by chunk_index within each file
+          return (a.chunk_index || 0) - (b.chunk_index || 0);
+        });
+        
+        console.log(`✅ Retrieved ${allRelevantChunks.length} chunks from ${files.length} files for full document analysis`);
+      } else {
+        // USE SEMANTIC SEARCH across ALL files
+        console.log(`🔍 Performing semantic search across ALL ${files.length} files for targeted query...`);
+        const questionEmbedding = await generateEmbedding(secretValue);
+        
+        // Get more chunks per file when searching (increase from maxResults to get better coverage)
+        const chunksPerFile = Math.max(maxResults, Math.ceil(MAX_CHUNKS / files.length) + 5);
+        
+        for (const file of files) {
+          const relevant = await ChunkVector.findNearestChunksAcrossFiles(
+            questionEmbedding,
+            chunksPerFile, // Get more chunks per file to ensure coverage
+            [file.id]
           );
+          if (relevant.length) {
+            allRelevantChunks.push(
+              ...relevant.map((r) => ({ 
+                ...r, 
+                filename: file.originalname,
+                file_id: file.id,
+                similarity: r.similarity || r.distance || 0 // Ensure similarity score exists
+              }))
+            );
+          }
         }
       }
 
@@ -3073,54 +3471,99 @@ exports.queryFolderDocuments = async (req, res) => {
         return res.status(404).json({ error: "No relevant information found for your query." });
       }
 
-      // ✅ Filter by similarity threshold and sort by relevance
-      const highQualityChunks = allRelevantChunks
-        .filter(chunk => {
-          const similarity = chunk.similarity || 0;
-          // Handle both similarity (higher is better) and distance (lower is better)
-          const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
-          return score >= SIMILARITY_THRESHOLD;
-        })
-        .sort((a, b) => {
-          const scoreA = a.similarity > 1 ? (1 / (1 + a.similarity)) : a.similarity;
-          const scoreB = b.similarity > 1 ? (1 / (1 + b.similarity)) : b.similarity;
-          return scoreB - scoreA; // Descending order (best first)
-        });
+      // ADAPTIVE FILTERING based on query intent
+      let selectedChunks;
+      let currentContextLength = 0; // Declare outside block for both branches
 
-      console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${allRelevantChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
-
-      // ✅ Select 5-10 best chunks while respecting token budget
-      let selectedChunks = [];
-      let currentContextLength = 0;
-
-      const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
-        ? highQualityChunks 
-        : allRelevantChunks.sort((a, b) => (b.similarity || 0) - (a.similarity || 0)); // Fallback to top chunks if not enough high-quality ones
-
-      for (const chunk of chunksToConsider) {
-        if (selectedChunks.length >= MAX_CHUNKS) break;
+      if (useFullDocumentForSecret) {
+        // USE INTELLIGENT CHUNK SELECTION - Select representative chunks from each file
+        // This ensures we stay within token limits while maintaining comprehensive coverage
+        const totalChars = allRelevantChunks.reduce((sum, chunk) => sum + ((chunk.content || '').length || 0), 0);
         
-        const chunkLength = chunk.content.length;
-        if (currentContextLength + chunkLength <= MAX_CONTEXT_CHARS) {
-          selectedChunks.push(chunk);
-          currentContextLength += chunkLength;
-        } else if (selectedChunks.length < MIN_CHUNKS) {
-          // If we haven't reached minimum, truncate this chunk to fit
-          const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
-          if (remainingSpace > 500) { // Only include if we have reasonable space
-            selectedChunks.push({
-              ...chunk,
-              content: chunk.content.substring(0, remainingSpace - 100) + "..."
-            });
-            currentContextLength += remainingSpace;
+        if (totalChars <= MAX_CONTEXT_CHARS) {
+          // All chunks fit - use them all
+          selectedChunks = allRelevantChunks;
+          currentContextLength = totalChars;
+          console.log(`📄 Using ALL ${selectedChunks.length} chunks from ${files.length} files (fits within limits)`);
+        } else {
+          // Too many chunks - use intelligent selection
+          console.log(`⚠️ Document too large (${totalChars} chars). Using intelligent chunk selection...`);
+          selectedChunks = selectRepresentativeChunks(allRelevantChunks, files, MAX_CONTEXT_CHARS);
+          currentContextLength = selectedChunks.reduce((sum, chunk) => sum + ((chunk.content || '').length || 0), 0);
+          console.log(`📄 Selected ${selectedChunks.length} representative chunks from ${files.length} files (${currentContextLength} chars, ${Math.ceil(currentContextLength / CHARS_PER_TOKEN)} tokens)`);
+          console.log(`📊 Coverage: ${((selectedChunks.length / allRelevantChunks.length) * 100).toFixed(1)}% of total chunks, ${((currentContextLength / totalChars) * 100).toFixed(1)}% of total content`);
+        }
+      } else {
+        // APPLY SIMILARITY FILTERING
+        const highQualityChunks = allRelevantChunks
+          .filter(chunk => {
+            const similarity = chunk.similarity || 0;
+            // Handle both similarity (higher is better) and distance (lower is better)
+            const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
+            return score >= SIMILARITY_THRESHOLD;
+          })
+          .sort((a, b) => {
+            const scoreA = a.similarity > 1 ? (1 / (1 + a.similarity)) : a.similarity;
+            const scoreB = b.similarity > 1 ? (1 / (1 + b.similarity)) : b.similarity;
+            return scoreB - scoreA; // Descending order (best first)
+          });
+
+        console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${allRelevantChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
+
+        // Select chunks within token budget, ensuring representation from multiple files
+        selectedChunks = [];
+        currentContextLength = 0; // Use the variable declared outside
+        const chunksPerFile = Math.ceil(MAX_CHUNKS / files.length); // Distribute chunks across files
+        const fileChunkCounts = {}; // Track chunks per file
+
+        const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
+          ? highQualityChunks 
+          : allRelevantChunks.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+
+        for (const chunk of chunksToConsider) {
+          if (selectedChunks.length >= MAX_CHUNKS) break;
+          
+          // Ensure we get chunks from multiple files
+          const fileId = chunk.file_id || chunk.filename;
+          fileChunkCounts[fileId] = (fileChunkCounts[fileId] || 0);
+          
+          // If we already have enough chunks from this file, skip unless we haven't reached MIN_CHUNKS
+          if (fileChunkCounts[fileId] >= chunksPerFile && selectedChunks.length >= MIN_CHUNKS) {
+            continue;
           }
-          break;
+          
+          const chunkLength = (chunk.content || '').length;
+          if (currentContextLength + chunkLength <= MAX_CONTEXT_CHARS) {
+            selectedChunks.push(chunk);
+            currentContextLength += chunkLength;
+            fileChunkCounts[fileId] = (fileChunkCounts[fileId] || 0) + 1;
+          } else if (selectedChunks.length < MIN_CHUNKS) {
+            // If we haven't reached minimum, truncate this chunk to fit
+            const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
+            if (remainingSpace > 500) {
+              selectedChunks.push({
+                ...chunk,
+                content: (chunk.content || '').substring(0, remainingSpace - 100) + "..."
+              });
+              currentContextLength += remainingSpace;
+              fileChunkCounts[fileId] = (fileChunkCounts[fileId] || 0) + 1;
+            }
+            break;
+          }
+        }
+
+        // Ensure minimum chunks
+        if (selectedChunks.length < MIN_CHUNKS && allRelevantChunks.length >= MIN_CHUNKS) {
+          selectedChunks = allRelevantChunks.slice(0, MIN_CHUNKS);
         }
       }
 
-      const finalChunks = selectedChunks.length >= MIN_CHUNKS 
-        ? selectedChunks 
-        : chunksToConsider.slice(0, MIN_CHUNKS); // Ensure minimum chunks
+      const finalChunks = selectedChunks;
+      
+      // Ensure currentContextLength is calculated (fallback if somehow not set)
+      if (currentContextLength === 0 && finalChunks.length > 0) {
+        currentContextLength = finalChunks.reduce((sum, chunk) => sum + ((chunk.content || '').length || 0), 0);
+      }
 
       console.log(`✅ Selected ${finalChunks.length} chunks | Context size: ${currentContextLength} chars (~${Math.ceil(currentContextLength / CHARS_PER_TOKEN)} tokens)`);
 
@@ -3135,9 +3578,38 @@ exports.queryFolderDocuments = async (req, res) => {
         })
         .join("\n\n");
 
-      console.log(`📊 Final context: ${combinedContext.length} chars (~${Math.ceil(combinedContext.length / CHARS_PER_TOKEN)} tokens, ${((combinedContext.length / CHARS_PER_TOKEN) / 32000 * 100).toFixed(1)}% of 32k limit)`);
+      // ✅ CONTEXT SIZE VALIDATION - Check before building final prompt
+      // Reuse providerLimit already declared above in secret prompt section
+      const safeLimit = Math.floor(providerLimit * 0.7); // Use 70% for safety (leaving room for prompt overhead)
+      const estimatedPromptTokens = Math.ceil((combinedContext.length + (secretValue || '').length) / CHARS_PER_TOKEN);
+      
+      if (estimatedPromptTokens > safeLimit) {
+        console.warn(`⚠️ Prompt size (${estimatedPromptTokens} tokens) exceeds safe limit (${safeLimit} tokens). Truncating context...`);
+        // Truncate context to fit within safe limit
+        const maxContextChars = (safeLimit - Math.ceil((secretValue || '').length / CHARS_PER_TOKEN)) * CHARS_PER_TOKEN;
+        const truncatedContext = combinedContext.substring(0, Math.max(0, maxContextChars - 500)) + '\n\n[...context truncated due to model limits...]';
+        llmContext = truncatedContext;
+        console.log(`📉 Truncated context from ${combinedContext.length} to ${truncatedContext.length} chars`);
+      } else {
+        llmContext = combinedContext;
+      }
+      
+      const finalContextTokens = Math.ceil(llmContext.length / CHARS_PER_TOKEN);
+      const providerLimitTokens = Math.floor(providerLimit / CHARS_PER_TOKEN);
+      console.log(`📊 Final context: ${llmContext.length} chars (~${finalContextTokens} tokens, ${((finalContextTokens / providerLimitTokens) * 100).toFixed(1)}% of ${providerLimitTokens}k limit)`);
 
-      llmContext = combinedContext;
+      // ✅ Build adaptive system context based on query mode
+      if (useFullDocumentForSecret) {
+        adaptiveSystemContext = `\n\n=== COMPREHENSIVE ANALYSIS MODE ===\nYou have been provided with representative chunks from ALL ${files.length} files in the folder "${folderName}". 
+Analyze the documents comprehensively and provide a thorough response that considers information across all files.
+- Synthesize information from multiple documents
+- Identify patterns, themes, and relationships across files
+- Provide comprehensive analysis based on the full document context
+- Ensure your response reflects the complete scope of the uploaded documents\n`;
+      } else {
+        adaptiveSystemContext = `\n\n=== TARGETED ANALYSIS MODE ===\nYou have been provided with the most relevant chunks from the folder "${folderName}" based on semantic search.
+Focus on directly answering the query using the provided context while maintaining accuracy and relevance.\n`;
+      }
 
       // ✅ Build minimal prompt
       let finalPrompt = `You are an expert AI legal assistant using the ${provider.toUpperCase()} model.\n\n`;
@@ -3152,7 +3624,7 @@ exports.queryFolderDocuments = async (req, res) => {
         finalPrompt += `=== PREVIOUS CONTEXT ===\n${lastQuestionAnswer}\n\n`;
       }
       
-      finalPrompt += `${secretValue}\n\n=== RELEVANT DOCUMENTS (FOLDER: "${folderName}") ===\n${combinedContext}`;
+      finalPrompt += `${secretValue}${adaptiveSystemContext}\n\n=== RELEVANT DOCUMENTS (FOLDER: "${folderName}") ===\n${llmContext}`;
 
       if (additional_input?.trim()) {
         const trimmedInput = additional_input.trim().substring(0, 500);
@@ -3212,6 +3684,15 @@ exports.queryFolderDocuments = async (req, res) => {
       provider = resolveFolderProviderName(dbLlmName || "gemini");
       console.log(`🤖 Resolved LLM provider for custom query: ${provider}`);
       
+      // ✅ Adjust MAX_CONTEXT_CHARS based on provider for custom questions
+      if (useFullDocument) {
+        const providerLimit = PROVIDER_CONTEXT_LIMITS[provider] || PROVIDER_CONTEXT_LIMITS['default'];
+        const maxContextForProvider = Math.floor(providerLimit * 0.75); // Use 75% for safety
+        MAX_CONTEXT_CHARS = maxContextForProvider;
+        MAX_CONTEXT_TOKENS = Math.floor(maxContextForProvider / CHARS_PER_TOKEN);
+        console.log(`📊 Adjusted MAX_CONTEXT_CHARS to ${MAX_CONTEXT_CHARS} chars (${MAX_CONTEXT_TOKENS} tokens) for provider ${provider}`);
+      }
+      
       // Check if provider is available
       const availableProviders = getFolderAvailableProviders();
       if (!availableProviders[provider] || !availableProviders[provider].available) {
@@ -3219,24 +3700,66 @@ exports.queryFolderDocuments = async (req, res) => {
         provider = 'gemini';
       }
      
-      // ✅ Vector search with similarity scoring
-      const questionEmbedding = await generateEmbedding(question);
-      const allRelevantChunks = [];
+      // ADAPTIVE CHUNK SELECTION based on query intent
+      let allRelevantChunks = [];
 
-      for (const file of files) {
-        const relevant = await ChunkVector.findNearestChunksAcrossFiles(
-          questionEmbedding,
-          maxResults, // Retrieve top 10 candidates per file
-          [file.id]
-        );
-        if (relevant.length) {
-          allRelevantChunks.push(
-            ...relevant.map((r) => ({ 
-              ...r, 
-              filename: file.originalname,
-              similarity: r.similarity || r.distance || 0
-            }))
+      if (useFullDocument) {
+        // GET ALL CHUNKS FROM ALL FILES - No embedding search needed
+        console.log(`📚 Fetching ALL chunks from ALL ${files.length} files for comprehensive analysis...`);
+        const FileChunk = require('../models/FileChunk');
+        
+        for (const file of files) {
+          const fileChunks = await FileChunk.getChunksByFileId(file.id);
+          if (fileChunks && fileChunks.length > 0) {
+            allRelevantChunks.push(
+              ...fileChunks.map((chunk) => ({
+                ...chunk,
+                file_id: file.id,
+                filename: file.originalname,
+                similarity: 1.0, // Mark as fully relevant
+                chunk_id: chunk.id,
+                distance: 0,
+                content: chunk.content
+              }))
+            );
+          }
+        }
+        
+        // Sort by file order, then chunk index to maintain document flow
+        allRelevantChunks.sort((a, b) => {
+          // First sort by filename to keep files together
+          if (a.filename !== b.filename) {
+            return a.filename.localeCompare(b.filename);
+          }
+          // Then sort by chunk_index within each file
+          return (a.chunk_index || 0) - (b.chunk_index || 0);
+        });
+        
+        console.log(`✅ Retrieved ${allRelevantChunks.length} chunks from ${files.length} files for full document analysis`);
+      } else {
+        // USE SEMANTIC SEARCH across ALL files
+        console.log(`🔍 Performing semantic search across ALL ${files.length} files for targeted query...`);
+        const questionEmbedding = await generateEmbedding(question);
+        
+        // Get more chunks per file when searching (increase from maxResults to get better coverage)
+        const chunksPerFile = Math.max(maxResults, Math.ceil(MAX_CHUNKS / files.length) + 5);
+        
+        for (const file of files) {
+          const relevant = await ChunkVector.findNearestChunksAcrossFiles(
+            questionEmbedding,
+            chunksPerFile, // Get more chunks per file to ensure coverage
+            [file.id]
           );
+          if (relevant.length) {
+            allRelevantChunks.push(
+              ...relevant.map((r) => ({ 
+                ...r, 
+                filename: file.originalname,
+                file_id: file.id,
+                similarity: r.similarity || r.distance || 0
+              }))
+            );
+          }
         }
       }
 
@@ -3244,8 +3767,31 @@ exports.queryFolderDocuments = async (req, res) => {
         return res.status(404).json({ error: "No relevant information found for your query." });
       }
 
-      // ✅ Filter by similarity threshold and sort by relevance
-      const highQualityChunks = allRelevantChunks
+      // ADAPTIVE FILTERING based on query intent
+      let selectedChunks;
+      let currentContextLength = 0; // Declare outside block for both branches
+
+      if (useFullDocument) {
+        // USE INTELLIGENT CHUNK SELECTION - Select representative chunks from each file
+        // This ensures we stay within token limits while maintaining comprehensive coverage
+        const totalChars = allRelevantChunks.reduce((sum, chunk) => sum + ((chunk.content || '').length || 0), 0);
+        
+        if (totalChars <= MAX_CONTEXT_CHARS) {
+          // All chunks fit - use them all
+          selectedChunks = allRelevantChunks;
+          currentContextLength = totalChars;
+          console.log(`📄 Using ALL ${selectedChunks.length} chunks from ${files.length} files (fits within limits)`);
+        } else {
+          // Too many chunks - use intelligent selection
+          console.log(`⚠️ Document too large (${totalChars} chars). Using intelligent chunk selection...`);
+          selectedChunks = selectRepresentativeChunks(allRelevantChunks, files, MAX_CONTEXT_CHARS);
+          currentContextLength = selectedChunks.reduce((sum, chunk) => sum + ((chunk.content || '').length || 0), 0);
+          console.log(`📄 Selected ${selectedChunks.length} representative chunks from ${files.length} files (${currentContextLength} chars, ${Math.ceil(currentContextLength / CHARS_PER_TOKEN)} tokens)`);
+          console.log(`📊 Coverage: ${((selectedChunks.length / allRelevantChunks.length) * 100).toFixed(1)}% of total chunks, ${((currentContextLength / totalChars) * 100).toFixed(1)}% of total content`);
+        }
+      } else {
+        // APPLY SIMILARITY FILTERING
+        const highQualityChunks = allRelevantChunks
         .filter(chunk => {
           const similarity = chunk.similarity || 0;
           const score = similarity > 1 ? (1 / (1 + similarity)) : similarity;
@@ -3257,46 +3803,68 @@ exports.queryFolderDocuments = async (req, res) => {
           return scoreB - scoreA;
         });
 
-      console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${allRelevantChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
+        console.log(`🎯 Filtered chunks: ${highQualityChunks.length}/${allRelevantChunks.length} above similarity threshold ${SIMILARITY_THRESHOLD}`);
 
-      // ✅ Select 5-10 best chunks while respecting token budget
-      let selectedChunks = [];
-      let currentContextLength = 0;
+        // Select chunks within token budget, ensuring representation from multiple files
+        selectedChunks = [];
+        currentContextLength = 0; // Use the variable declared outside
+        const chunksPerFile = Math.ceil(MAX_CHUNKS / files.length); // Distribute chunks across files
+        const fileChunkCounts = {}; // Track chunks per file
 
-      const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
-        ? highQualityChunks 
-        : allRelevantChunks.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+        const chunksToConsider = highQualityChunks.length >= MIN_CHUNKS 
+          ? highQualityChunks 
+          : allRelevantChunks.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
 
-      for (const chunk of chunksToConsider) {
-        if (selectedChunks.length >= MAX_CHUNKS) break;
-        
-        const chunkLength = chunk.content.length;
-        if (currentContextLength + chunkLength <= MAX_CONTEXT_CHARS) {
-          selectedChunks.push(chunk);
-          currentContextLength += chunkLength;
-        } else if (selectedChunks.length < MIN_CHUNKS) {
-          const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
-          if (remainingSpace > 500) {
-            selectedChunks.push({
-              ...chunk,
-              content: chunk.content.substring(0, remainingSpace - 100) + "..."
-            });
-            currentContextLength += remainingSpace;
+        for (const chunk of chunksToConsider) {
+          if (selectedChunks.length >= MAX_CHUNKS) break;
+          
+          // Ensure we get chunks from multiple files
+          const fileId = chunk.file_id || chunk.filename;
+          fileChunkCounts[fileId] = (fileChunkCounts[fileId] || 0);
+          
+          // If we already have enough chunks from this file, skip unless we haven't reached MIN_CHUNKS
+          if (fileChunkCounts[fileId] >= chunksPerFile && selectedChunks.length >= MIN_CHUNKS) {
+            continue;
           }
-          break;
+          
+          const chunkLength = (chunk.content || '').length;
+          if (currentContextLength + chunkLength <= MAX_CONTEXT_CHARS) {
+            selectedChunks.push(chunk);
+            currentContextLength += chunkLength;
+            fileChunkCounts[fileId] = (fileChunkCounts[fileId] || 0) + 1;
+          } else if (selectedChunks.length < MIN_CHUNKS) {
+            const remainingSpace = MAX_CONTEXT_CHARS - currentContextLength;
+            if (remainingSpace > 500) {
+              selectedChunks.push({
+                ...chunk,
+                content: (chunk.content || '').substring(0, remainingSpace - 100) + "..."
+              });
+              currentContextLength += remainingSpace;
+              fileChunkCounts[fileId] = (fileChunkCounts[fileId] || 0) + 1;
+            }
+            break;
+          }
+        }
+
+        // Ensure minimum chunks
+        if (selectedChunks.length < MIN_CHUNKS && allRelevantChunks.length >= MIN_CHUNKS) {
+          selectedChunks = allRelevantChunks.slice(0, MIN_CHUNKS);
         }
       }
 
-      const finalChunks = selectedChunks.length >= MIN_CHUNKS 
-        ? selectedChunks 
-        : chunksToConsider.slice(0, MIN_CHUNKS);
+      const finalChunks = selectedChunks;
+      
+      // Ensure currentContextLength is calculated (fallback if somehow not set)
+      if (currentContextLength === 0 && finalChunks.length > 0) {
+        currentContextLength = finalChunks.reduce((sum, chunk) => sum + ((chunk.content || '').length || 0), 0);
+      }
 
       console.log(`✅ Selected ${finalChunks.length} chunks | Context size: ${currentContextLength} chars (~${Math.ceil(currentContextLength / CHARS_PER_TOKEN)} tokens)`);
 
       usedChunkIds = finalChunks.map((c) => c.chunk_id || c.id);
 
       // ✅ Calculate realistic token cost
-      chatCost = Math.ceil(question.length / 100) + Math.ceil(currentContextLength / 200);
+      chatCost = Math.ceil((storedQuestion || question || '').length / 100) + Math.ceil(currentContextLength / 200);
 
       const requestedResources = { tokens: chatCost, ai_analysis: 1 };
       const { allowed, message } = await TokenUsageService.enforceLimits(
@@ -3321,9 +3889,40 @@ exports.queryFolderDocuments = async (req, res) => {
         })
         .join("\n\n");
 
-      console.log(`📊 Final context: ${combinedContext.length} chars (~${Math.ceil(combinedContext.length / CHARS_PER_TOKEN)} tokens, ${((combinedContext.length / CHARS_PER_TOKEN) / 32000 * 100).toFixed(1)}% of 32k limit)`);
+      // ✅ CONTEXT SIZE VALIDATION - Check before building final prompt
+      const providerLimit = PROVIDER_CONTEXT_LIMITS[provider] || PROVIDER_CONTEXT_LIMITS['default'];
+      const safeLimit = Math.floor(providerLimit * 0.7); // Use 70% for safety (leaving room for prompt overhead)
+      const questionLength = (storedQuestion || question || '').length;
+      const estimatedPromptTokens = Math.ceil((combinedContext.length + questionLength) / CHARS_PER_TOKEN);
+      
+      if (estimatedPromptTokens > safeLimit) {
+        console.warn(`⚠️ Prompt size (${estimatedPromptTokens} tokens) exceeds safe limit (${safeLimit} tokens). Truncating context...`);
+        // Truncate context to fit within safe limit
+        const maxContextChars = (safeLimit - Math.ceil(questionLength / CHARS_PER_TOKEN)) * CHARS_PER_TOKEN;
+        const truncatedContext = combinedContext.substring(0, Math.max(0, maxContextChars - 500)) + '\n\n[...context truncated due to model limits...]';
+        llmContext = truncatedContext;
+        currentContextLength = truncatedContext.length;
+        console.log(`📉 Truncated context from ${combinedContext.length} to ${truncatedContext.length} chars`);
+      } else {
+        llmContext = combinedContext;
+      }
+      
+      const finalContextTokens = Math.ceil(llmContext.length / CHARS_PER_TOKEN);
+      const providerLimitTokens = Math.floor(providerLimit / CHARS_PER_TOKEN);
+      console.log(`📊 Final context: ${llmContext.length} chars (~${finalContextTokens} tokens, ${((finalContextTokens / providerLimitTokens) * 100).toFixed(1)}% of ${providerLimitTokens}k limit)`);
 
-      llmContext = combinedContext;
+      // ✅ Build adaptive system context based on query mode
+      if (useFullDocument) {
+        adaptiveSystemContext = `\n\n=== COMPREHENSIVE ANALYSIS MODE ===\nYou have been provided with representative chunks from ALL ${files.length} files in the folder "${folderName}". 
+Analyze the documents comprehensively and provide a thorough response that considers information across all files.
+- Synthesize information from multiple documents
+- Identify patterns, themes, and relationships across files
+- Provide comprehensive analysis based on the full document context
+- Ensure your response reflects the complete scope of the uploaded documents\n`;
+      } else {
+        adaptiveSystemContext = `\n\n=== TARGETED ANALYSIS MODE ===\nYou have been provided with the most relevant chunks from the folder "${folderName}" based on semantic search.
+Focus on directly answering the query using the provided context while maintaining accuracy and relevance.\n`;
+      }
 
       // Build prompt with case data and last question/answer context
       let finalPrompt = '';
@@ -3338,7 +3937,7 @@ exports.queryFolderDocuments = async (req, res) => {
         finalPrompt += `=== PREVIOUS CONTEXT ===\n${lastQuestionAnswer}\n\n`;
       }
       
-      finalPrompt += `${storedQuestion}\n\n=== RELEVANT DOCUMENTS (FOLDER: "${folderName}") ===\n${combinedContext}`;
+      finalPrompt += `${storedQuestion}${adaptiveSystemContext}\n\n=== RELEVANT DOCUMENTS (FOLDER: "${folderName}") ===\n${llmContext}`;
       
       if (additional_input?.trim()) {
         finalPrompt += `\n\n=== ADDITIONAL USER INPUT ===\n${additional_input.trim().substring(0, 500)}`;
