@@ -17,6 +17,9 @@ Proxied to `AUTH_SERVICE_URL` (e.g., `http://localhost:5001`) with path rewrite 
 | `/auth/delete`             | DELETE | Delete user account     | `/api/auth/delete`    |
 | `/auth/logout`             | POST   | Logout user             | `/api/auth/logout`    |
 | `/auth/profile`            | GET    | Fetch user profile      | `/api/auth/profile`   |
+| `/auth/user-info`          | GET    | Get user info (fullname, email, mobile) | `/api/auth/user-info` |
+| `/auth/professional-profile` | GET  | Get professional profile | `/api/auth/professional-profile` |
+| `/auth/professional-profile` | PUT  | Update professional profile | `/api/auth/professional-profile` |
 
 ## Document Service Endpoints (`/files`)
 

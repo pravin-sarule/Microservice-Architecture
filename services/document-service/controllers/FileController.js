@@ -27,7 +27,7 @@ const { getSignedUrl } = require("../services/folderService"); // Import from fo
 const { checkStorageLimit } = require("../utils/storage");
 const { bucket } = require("../config/gcs");
 const { askGemini, getSummaryFromChunks, askLLM, getAvailableProviders, resolveProviderName } = require("../services/aiService");
-const { askLLM: askFolderLLMService, resolveProviderName: resolveFolderProviderName, getAvailableProviders: getFolderAvailableProviders } = require("../services/folderAiService"); // Import askLLM, resolveProviderName, and getAvailableProviders from folderAiService
+const { askLLM: askFolderLLMService, streamLLM: streamFolderLLM, resolveProviderName: resolveFolderProviderName, getAvailableProviders: getFolderAvailableProviders } = require("../services/folderAiService"); // Import askLLM, streamLLM, resolveProviderName, and getAvailableProviders from folderAiService
 const UserProfileService = require("../services/userProfileService");
 const { extractText } = require("../utils/textExtractor");
 const {
@@ -4014,6 +4014,132 @@ Focus on directly answering the query using the provided context while maintaini
     });
   }
 };
+
+// ---------------------------
+// SSE Streaming Version of queryFolderDocuments
+// Handles unlimited length responses with heartbeat to prevent timeout
+// ---------------------------
+exports.queryFolderDocumentsStream = async (req, res) => {
+  let userId = req.user.id;
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(`data: [PING]\n\n`);
+    } catch (err) {
+      // Connection closed, stop heartbeat
+      clearInterval(heartbeat);
+    }
+  }, 15000);
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  try {
+    // Send initial metadata
+    res.write(`data: ${JSON.stringify({ type: 'metadata', status: 'streaming_started' })}\n\n`);
+
+    console.log('[queryFolderDocumentsStream] Streaming started');
+
+    // Post-upload folder query - use existing logic but stream the response
+    // Strategy: Call queryFolderDocuments with a mock response that captures the answer
+    // Then stream it back to the client
+    
+    let capturedData = null;
+    let captureError = null;
+    
+    // Create mock response to capture the JSON response
+    // Must have all methods that queryFolderDocuments might call
+    const mockRes = {
+      status: (code) => {
+        mockRes.statusCode = code;
+        return mockRes;
+      },
+      json: (data) => {
+        capturedData = data;
+        return mockRes;
+      },
+      setHeader: () => mockRes,
+      writeHead: () => mockRes,
+      end: () => {},
+      headersSent: false,
+      statusCode: 200
+    };
+
+    // Create a properly structured mock request that preserves all original request properties
+    // CRITICAL: Preserve headers object with all properties including authorization
+    const mockReq = {
+      ...req,
+      headers: {
+        ...(req.headers || {}),
+        authorization: req.headers?.authorization || req.header?.('authorization') || ''
+      },
+      user: req.user || {},
+      body: req.body || {},
+      params: req.params || {},
+      query: req.query || {}
+    };
+
+    // Call the non-streaming version to build prompt and get answer
+    try {
+      // queryFolderDocuments expects (req, res) - pass both
+      await exports.queryFolderDocuments(mockReq, mockRes);
+    } catch (err) {
+      captureError = err;
+    }
+
+    if (captureError) {
+      clearInterval(heartbeat);
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'Failed to process request', details: captureError.message })}\n\n`);
+      res.end();
+      return;
+    }
+
+    if (!capturedData || !capturedData.answer) {
+      clearInterval(heartbeat);
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'No answer received' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    // Stream the captured answer
+    res.write(`data: ${JSON.stringify({ type: 'metadata', session_id: capturedData.session_id })}\n\n`);
+    
+    // Stream answer character by character for smooth streaming effect
+    const answer = capturedData.answer;
+    const chunkSize = 10; // Stream 10 characters at a time
+    for (let i = 0; i < answer.length; i += chunkSize) {
+      const chunk = answer.substring(i, Math.min(i + chunkSize, answer.length));
+      res.write(`data: ${JSON.stringify({ type: 'chunk', text: chunk })}\n\n`);
+      // Small delay for streaming effect
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    
+    // Send completion
+    res.write(`data: ${JSON.stringify({ 
+      type: 'done', 
+      session_id: capturedData.session_id, 
+      answer: capturedData.answer,
+      llm_provider: capturedData.llm_provider,
+      used_chunk_ids: capturedData.used_chunk_ids,
+      chunks_used: capturedData.chunks_used,
+      files_queried: capturedData.files_queried,
+      total_files: capturedData.total_files
+    })}\n\n`);
+    res.write(`data: [DONE]\n\n`);
+    clearInterval(heartbeat);
+    res.end();
+    
+  } catch (error) {
+    console.error('❌ Error in queryFolderDocumentsStream:', error);
+    clearInterval(heartbeat);
+    if (!res.headersSent) {
+      res.write(`data: ${JSON.stringify({ type: 'error', message: 'Failed to get AI answer.', details: error.message })}\n\n`);
+    }
+    res.end();
+  }
+};
+
 /* ----------------- Get Folder Processing Status (NEW) ----------------- */
 exports.getFolderProcessingStatus = async (req, res) => {
   try {

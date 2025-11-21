@@ -80,6 +80,14 @@ router.post(
     controller.chatWithDocument
 );
 
+// Chat with the document (RAG) - SSE Streaming Version
+router.post(
+    '/chat/stream',
+    protect,
+    checkDocumentUploadLimits,
+    controller.chatWithDocumentStream
+);
+
 // Save edited (docx + pdf variants)
 router.post(
     '/save',

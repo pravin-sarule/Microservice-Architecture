@@ -46,6 +46,8 @@ router.get("/:folderName/status", authMiddleware.protect, fileController.getFold
 // NEW ROUTES - Query documents in folder (like Claude AI project modules)
 router.post("/:folderName/query", authMiddleware.protect, fileController.queryFolderDocuments);
 
+// NEW ROUTES - Query documents in folder - SSE Streaming Version
+router.post("/:folderName/query/stream", authMiddleware.protect, fileController.queryFolderDocumentsStream);
 
 // ============ NEW CHAT SESSION ROUTES ============
 // Get all chat sessions for a folder (with previews and metadata)

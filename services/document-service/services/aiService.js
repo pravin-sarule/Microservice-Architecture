@@ -2579,6 +2579,158 @@ async function callSinglePrompt(provider, prompt, context = '') {
 }
 
 // ---------------------------
+// Streaming LLM Caller (SSE Support)
+// Returns async generator that yields text chunks
+// ---------------------------
+async function* streamLLM(providerName, userMessage, context = '', relevant_chunks = '', originalQuestion = null) {
+  // Use the same logic as askLLM to build prompt and context
+  // Then stream the response instead of waiting for complete response
+  const provider = resolveProviderName(providerName);
+  const config = LLM_CONFIGS[provider];
+  if (!config) throw new Error(`❌ Unsupported LLM provider: ${provider}`);
+
+  const safeContext = typeof context === 'string' ? context : '';
+  let userQuestionForSearch = originalQuestion || userMessage;
+  
+  // Extract question for web search (same logic as askLLM)
+  if (!originalQuestion && userMessage) {
+    const userQuestionMatch = userMessage.match(/USER QUESTION:\s*(.+?)(?:\n\n===|$)/s);
+    if (userQuestionMatch) {
+      userQuestionForSearch = userQuestionMatch[1].trim();
+    }
+  }
+
+  // Check for explicit web request (same logic as askLLM)
+  const messageLower = userQuestionForSearch.toLowerCase();
+  const explicitWebKeywords = [
+    'search web', 'search online', 'from web', 'web se', 'web pe', 
+    'don\'t want from document', 'not from document', 'ignore document'
+  ];
+  const isExplicitWebRequest = explicitWebKeywords.some(keyword => messageLower.includes(keyword));
+  
+  // Process context and chunks (same as askLLM)
+  let trimmedContext, filteredChunks, trimmedChunks;
+  if (isExplicitWebRequest) {
+    trimmedContext = '';
+    filteredChunks = '';
+    trimmedChunks = '';
+  } else {
+    trimmedContext = trimContext(safeContext, 20000);
+    filteredChunks = filterRelevantChunks(relevant_chunks, userQuestionForSearch, 12);
+    trimmedChunks = trimContext(filteredChunks, 20000);
+  }
+
+  // Handle web search if needed
+  let webSearchData = null;
+  const needsWebSearch = isExplicitWebRequest || shouldTriggerWebSearch(userQuestionForSearch, trimmedContext, trimmedChunks);
+  if (needsWebSearch) {
+    webSearchData = await performWebSearch(userQuestionForSearch, 5);
+  }
+
+  // Build prompt (same logic as askLLM)
+  let prompt = userMessage.trim();
+  if (trimmedChunks && !isExplicitWebRequest) {
+    prompt += `\n\n=== UPLOADED DOCUMENTS CONTEXT ===\n${trimmedChunks}`;
+  }
+  if (webSearchData && webSearchData.results) {
+    prompt += `\n\n=== WEB SEARCH RESULTS ===\n${webSearchData.results}`;
+  }
+
+  // Get system prompt
+  const systemPrompt = await getSystemPrompt(trimmedContext);
+  const isGemini = provider.startsWith('gemini');
+  const isClaude = provider.startsWith('claude') || provider === 'anthropic';
+
+  // Stream based on provider
+  if (isGemini) {
+    const models = GEMINI_MODELS[provider] || GEMINI_MODELS['gemini'];
+    for (const modelName of models) {
+      try {
+        const maxOutputTokens = await getModelMaxTokens(provider, modelName);
+        const isGemini3Pro = modelName === 'gemini-3-pro-preview';
+        
+        if (isGemini3Pro) {
+          // Gemini 3.0 Pro streaming (new SDK)
+          const request = {
+            model: modelName,
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
+            generationConfig: { maxOutputTokens, temperature: 0.7 },
+          };
+          
+          // Stream response
+          const response = await genAI3.models.generateContentStream(request);
+          for await (const chunk of response.stream) {
+            const text = chunk.text || '';
+            if (text) yield text;
+          }
+          return; // Successfully streamed
+        } else {
+          // Legacy Gemini streaming
+          const model = genAI.getGenerativeModel(
+            systemPrompt ? { model: modelName, systemInstruction: systemPrompt } : { model: modelName }
+          );
+          const result = await model.generateContentStream(prompt, {
+            generationConfig: { maxOutputTokens },
+          });
+          
+          for await (const chunk of result.stream) {
+            const text = chunk.text();
+            if (text) yield text;
+          }
+          return; // Successfully streamed
+        }
+      } catch (err) {
+        if (modelName === models[models.length - 1]) throw err;
+        continue;
+      }
+    }
+  }
+
+  // Claude / OpenAI / DeepSeek streaming
+  const messages = isClaude
+    ? [{ role: 'user', content: prompt }]
+    : [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }];
+
+  const resolvedModelName = config.model;
+  const maxTokens = await getModelMaxTokens(provider, resolvedModelName);
+
+  const payload = isClaude
+    ? { model: config.model, max_tokens: maxTokens, messages, system: systemPrompt, stream: true }
+    : { model: config.model, messages, max_tokens: maxTokens, temperature: 0.5, stream: true };
+
+  // For OpenAI/Claude/DeepSeek, we need to use streaming endpoints
+  const response = await axios.post(config.apiUrl, payload, {
+    headers: config.headers,
+    responseType: 'stream',
+    timeout: 240000,
+  });
+
+  // Stream chunks from response
+  let buffer = '';
+  for await (const chunk of response.data) {
+    buffer += chunk.toString();
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || ''; // Keep incomplete line in buffer
+    
+    for (const line of lines) {
+      if (!line.trim() || !line.startsWith('data: ')) continue;
+      const data = line.replace(/^data: /, '').trim();
+      if (data === '[DONE]') return;
+      try {
+        const json = JSON.parse(data);
+        const text = isClaude
+          ? json.delta?.text || json.content_block_delta?.text || ''
+          : json.choices?.[0]?.delta?.content || '';
+        if (text) yield text;
+      } catch (e) {
+        // Skip invalid JSON - might be partial data
+      }
+    }
+  }
+}
+
+// ---------------------------
 // Exports
 // ---------------------------
 async function getSummaryFromChunks(chunks) {
@@ -2595,6 +2747,7 @@ async function getSummaryFromChunks(chunks) {
 
 module.exports = {
   askLLM,
+  streamLLM,
   resolveProviderName,
   getAvailableProviders,
   getSummaryFromChunks,

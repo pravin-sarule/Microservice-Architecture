@@ -22,7 +22,8 @@ const { createProxyMiddleware } = require("http-proxy-middleware");
 const express = require("express");
 const router = express.Router();
 
-const targetAuth = process.env.AUTH_SERVICE_URL || "https://auth-service-w1eg.onrender.com";
+// Default to localhost for local development, remote URL for production
+const targetAuth = process.env.AUTH_SERVICE_URL || "http://localhost:5001";
 
 router.use(
   "/auth",
@@ -30,7 +31,7 @@ router.use(
     target: targetAuth,
     changeOrigin: true,
     pathRewrite: {
-      "^/auth": "", // remove /auth from the URL, forward as /api/auth/login
+      "^/auth": "/api/auth", // /auth/user-info → /api/auth/user-info
     },
     onProxyReq: (proxyReq, req, res) => {
       console.log("[GATEWAY] Proxying to:", targetAuth + proxyReq.path);
