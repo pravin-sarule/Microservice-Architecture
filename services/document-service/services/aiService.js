@@ -2660,9 +2660,37 @@ async function* streamLLM(providerName, userMessage, context = '', relevant_chun
           
           // Stream response
           const response = await genAI3.models.generateContentStream(request);
-          for await (const chunk of response.stream) {
-            const text = chunk.text || '';
-            if (text) yield text;
+          
+          // Handle different response structures - the response might be the stream itself
+          // or it might have a .stream property
+          let stream = null;
+          if (response && typeof response[Symbol.asyncIterator] === 'function') {
+            // Response itself is iterable
+            stream = response;
+          } else if (response && response.stream && typeof response.stream[Symbol.asyncIterator] === 'function') {
+            // Response has a .stream property that is iterable
+            stream = response.stream;
+          } else {
+            // Log detailed error information for debugging
+            console.error('[Gemini 3.0 Pro Stream] Invalid response structure:', {
+              hasStream: !!response?.stream,
+              hasResponse: !!response,
+              responseKeys: response ? Object.keys(response) : [],
+              responseType: typeof response,
+              isIterable: response && typeof response[Symbol.asyncIterator] === 'function',
+              streamIsIterable: response?.stream && typeof response.stream[Symbol.asyncIterator] === 'function'
+            });
+            throw new Error('Invalid streaming response from Gemini 3.0 Pro API - response is not iterable');
+          }
+          
+          try {
+            for await (const chunk of stream) {
+              const text = chunk?.text || (typeof chunk?.text === 'function' ? chunk.text() : '') || '';
+              if (text) yield text;
+            }
+          } catch (streamError) {
+            console.error('[Gemini 3.0 Pro Stream] Error during streaming:', streamError);
+            throw streamError;
           }
           return; // Successfully streamed
         } else {
