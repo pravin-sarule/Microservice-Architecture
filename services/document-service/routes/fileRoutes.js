@@ -73,4 +73,11 @@ router.get("/document/:fileId/stream", authMiddleware.protect, fileController.st
 
 router.delete("/:fileId", authMiddleware.protect, fileController.deleteDocument);
 
+// Get file with all related data (chunks, chats, metadata) - user-specific
+router.get(
+  "/file/:file_id/complete",
+  authMiddleware.protect,
+  fileController.getFileComplete
+);
+
 module.exports = router;

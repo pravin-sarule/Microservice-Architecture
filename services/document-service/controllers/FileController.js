@@ -5376,3 +5376,105 @@ exports.streamDocument = async (req, res) => {
   }
 };
 
+/**
+ * @description Get file with all related data (chunks, chats, metadata) - user-specific
+ * @route GET /api/files/file/:file_id/complete
+ */
+exports.getFileComplete = async (req, res) => {
+  const userId = req.user.id;
+  const { file_id } = req.params;
+
+  try {
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    if (!file_id) return res.status(400).json({ error: "file_id is required" });
+
+    // Get file metadata
+    const file = await File.getFileById(file_id);
+    if (!file) {
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    // Verify user owns the file
+    if (String(file.user_id) !== String(userId)) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    // Get all chunks for this file
+    const chunks = await FileChunk.getChunksByFileId(file_id);
+
+    // Get chat history for this file
+    const chats = await FileChat.getChatHistory(file_id);
+
+    // Get processing job if exists
+    const processingJob = await ProcessingJob.getJobByFileId(file_id);
+
+    // Get folder chat history if this file is in a folder
+    let folderChats = [];
+    if (file.folder_path) {
+      const folderName = file.folder_path.split('/').pop() || file.folder_path;
+      folderChats = await FolderChat.getFolderChatHistory(userId, folderName);
+    }
+
+    // Return complete file data
+    return res.status(200).json({
+      success: true,
+      file: {
+        id: file.id,
+        user_id: file.user_id,
+        originalname: file.originalname,
+        gcs_path: file.gcs_path,
+        folder_path: file.folder_path,
+        mimetype: file.mimetype,
+        size: file.size,
+        is_folder: file.is_folder,
+        status: file.status,
+        processing_progress: file.processing_progress,
+        current_operation: file.current_operation,
+        summary: file.summary,
+        full_text_content: file.full_text_content,
+        created_at: file.created_at,
+        updated_at: file.updated_at,
+        processed_at: file.processed_at
+      },
+      chunks: chunks.map(chunk => ({
+        id: chunk.id,
+        chunk_index: chunk.chunk_index,
+        content: chunk.content,
+        token_count: chunk.token_count,
+        page_start: chunk.page_start,
+        page_end: chunk.page_end,
+        heading: chunk.heading
+      })),
+      chats: chats.map(chat => ({
+        id: chat.id,
+        question: chat.question,
+        answer: chat.answer,
+        session_id: chat.session_id,
+        used_chunk_ids: chat.used_chunk_ids,
+        used_secret_prompt: chat.used_secret_prompt,
+        prompt_label: chat.prompt_label,
+        created_at: chat.created_at
+      })),
+      folder_chats: folderChats.map(chat => ({
+        id: chat.id,
+        question: chat.question,
+        answer: chat.answer,
+        session_id: chat.session_id,
+        created_at: chat.created_at
+      })),
+      processing_job: processingJob ? {
+        job_id: processingJob.job_id,
+        status: processingJob.status,
+        type: processingJob.type,
+        created_at: processingJob.created_at
+      } : null,
+      total_chunks: chunks.length,
+      total_chats: chats.length,
+      total_folder_chats: folderChats.length
+    });
+  } catch (error) {
+    console.error("❌ getFileComplete error:", error);
+    return res.status(500).json({ error: "Failed to retrieve file data" });
+  }
+};
+

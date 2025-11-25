@@ -14,6 +14,7 @@ const fileProxy = require("./routes/fileProxy");
 const paymentProxy = require("./routes/paymentProxy");
 const supportProxy = require("./routes/supportProxy");
 const draftProxy = require("./routes/draftProxy");
+const visualProxy = require("./routes/visualProxy");
 // const userResourcesProxy = require("./routes/userResourcesProxy");
 
 const app = express();
@@ -31,15 +32,28 @@ const app = express();
 const allowedOrigins = [
   "http://localhost:5173", // Vite dev server
   "http://localhost:5000", // local testing
+  "http://localhost:8000", // HTTP server for test pages
+  "http://localhost:3000", // Alternative test server
+  "http://127.0.0.1:8000", // HTTP server (alternative)
+  "http://127.0.0.1:3000", // Alternative test server
   "https://nexintel.netlify.app" // your production frontend
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin) return callback(null, true); // allow server-to-server requests or Postman
+    // Allow requests with no origin (like Postman, curl, or file:// protocol)
+    if (!origin) return callback(null, true);
+    
+    // Allow requests from allowed origins
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
+    
+    // For development: allow localhost with any port
+    if (origin && (origin.startsWith("http://localhost:") || origin.startsWith("http://127.0.0.1:"))) {
+      return callback(null, true);
+    }
+    
     return callback(new Error("Not allowed by CORS"));
   },
   credentials: true, // if sending cookies
@@ -66,6 +80,7 @@ app.use(fileProxy);
 app.use(paymentProxy);
 app.use("/support", supportProxy);
 app.use("/drafting", draftProxy);
+app.use(visualProxy); // Visual Service proxy for flowchart generation
 // app.use(userResourcesProxy);
 
 // Catch-all for 404 errors

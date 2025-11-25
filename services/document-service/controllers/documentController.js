@@ -3341,6 +3341,15 @@ exports.chatWithDocumentStream = async (req, res) => {
           for await (const chunk of streamLLM(provider, finalPrompt, '', '', userPrompt)) {
             fullAnswer += chunk;
             res.write(`data: ${JSON.stringify({ type: 'chunk', text: chunk })}\n\n`);
+        // CRITICAL: Flush immediately to send chunk to frontend without buffering
+        if (res.flush && typeof res.flush === 'function') {
+          res.flush();
+        }
+            // CRITICAL: Flush immediately to send chunk to frontend without buffering
+            // This ensures true streaming (word-by-word) instead of clumped delivery
+            if (res.flush && typeof res.flush === 'function') {
+              res.flush();
+            }
           }
         } catch (streamError) {
           console.error('[chatWithDocumentStream] Streaming error:', streamError);
@@ -3476,6 +3485,10 @@ exports.chatWithDocumentStream = async (req, res) => {
       for (let i = 0; i < answer.length; i += chunkSize) {
         const chunk = answer.substring(i, Math.min(i + chunkSize, answer.length));
         res.write(`data: ${JSON.stringify({ type: 'chunk', text: chunk })}\n\n`);
+        // CRITICAL: Flush immediately to send chunk to frontend without buffering
+        if (res.flush && typeof res.flush === 'function') {
+          res.flush();
+        }
         // Small delay for streaming effect
         await new Promise(resolve => setTimeout(resolve, 10));
       }
@@ -4590,6 +4603,92 @@ exports.getDeletePreview = async (req, res) => {
 };
 
 
+
+/**
+ * @description Get document with all related data (chunks, chats, metadata) - user-specific
+ * @route GET /api/doc/document/:file_id/complete
+ */
+exports.getDocumentComplete = async (req, res) => {
+  const userId = req.user.id;
+  const { file_id } = req.params;
+
+  try {
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    if (!file_id) return res.status(400).json({ error: "file_id is required" });
+
+    // Get file metadata
+    const file = await DocumentModel.getFileById(file_id);
+    if (!file) {
+      return res.status(404).json({ error: "Document not found" });
+    }
+
+    // Verify user owns the document
+    if (String(file.user_id) !== String(userId)) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+
+    // Get all chunks for this file
+    const chunks = await FileChunkModel.getChunksByFileId(file_id);
+
+    // Get chat history for this file
+    const chats = await FileChat.getChatHistory(file_id);
+
+    // Get processing job if exists
+    const processingJob = await ProcessingJobModel.getJobByFileId(file_id);
+
+    // Return complete document data
+    return res.status(200).json({
+      success: true,
+      document: {
+        id: file.id,
+        user_id: file.user_id,
+        originalname: file.originalname,
+        gcs_path: file.gcs_path,
+        folder_path: file.folder_path,
+        mimetype: file.mimetype,
+        size: file.size,
+        status: file.status,
+        processing_progress: file.processing_progress,
+        current_operation: file.current_operation,
+        summary: file.summary,
+        full_text_content: file.full_text_content,
+        created_at: file.created_at,
+        updated_at: file.updated_at,
+        processed_at: file.processed_at
+      },
+      chunks: chunks.map(chunk => ({
+        id: chunk.id,
+        chunk_index: chunk.chunk_index,
+        content: chunk.content,
+        token_count: chunk.token_count,
+        page_start: chunk.page_start,
+        page_end: chunk.page_end,
+        heading: chunk.heading
+      })),
+      chats: chats.map(chat => ({
+        id: chat.id,
+        question: chat.question,
+        answer: chat.answer,
+        session_id: chat.session_id,
+        used_chunk_ids: chat.used_chunk_ids,
+        used_secret_prompt: chat.used_secret_prompt,
+        prompt_label: chat.prompt_label,
+        created_at: chat.created_at
+      })),
+      processing_job: processingJob ? {
+        job_id: processingJob.job_id,
+        status: processingJob.status,
+        type: processingJob.type,
+        created_at: processingJob.created_at
+      } : null,
+      total_chunks: chunks.length,
+      total_chats: chats.length
+    });
+  } catch (error) {
+    console.error("❌ getDocumentComplete error:", error);
+    return res.status(500).json({ error: "Failed to retrieve document data" });
+  }
+};
 
 // Export processDocument for use in other modules (e.g., documentRoutes)
 exports.processDocument = processDocument;

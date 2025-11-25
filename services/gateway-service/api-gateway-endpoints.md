@@ -52,3 +52,69 @@ All routes under `/payments` are protected by JWT authentication.
 | `/payments/subscription/verify`    | POST   | Verify a subscription               | `/api/payments/subscription/verify` |
 | `/payments/history`                | GET    | Get user payment history            | `/api/payments/history`       |
 | `/payments/token-usage`            | POST   | Check and deduct user tokens        | `/api/payments/token-usage`   |
+
+## Visual Service Endpoints (`/visual`)
+
+Proxied to `VISUAL_SERVICE_URL` (e.g., `http://localhost:8081`) with path rewrite `/visual` to `/api/visual`.
+All routes under `/visual` are protected by JWT authentication.
+
+| Gateway Endpoint                       | Method | Description                         | Backend Service Route         |
+|----------------------------------------|--------|-------------------------------------|-------------------------------|
+| `/visual/generate-flowchart`          | POST   | Generate flowchart from single document | `/api/visual/generate-flowchart` |
+| `/visual/generate-flowchart-multi`    | POST   | Generate flowchart from multiple documents | `/api/visual/generate-flowchart-multi` |
+
+### Visual Service Endpoint Details
+
+#### POST `/visual/generate-flowchart`
+Generates a flowchart from a single document using Gemini 1.5 Flash.
+
+**Request Body**:
+```json
+{
+  "file_id": "uuid-of-document",
+  "prompt": "Create a process flowchart",  // Optional
+  "flowchart_type": "process"  // Optional, default: "process"
+}
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "file_id": "uuid",
+  "document_name": "document.pdf",
+  "flowchart_type": "process",
+  "flowchart_description": "AI-generated description...",
+  "mermaid_syntax": "graph TD\nA[Start] --> B[Process]",
+  "generated_at": "2024-01-01T12:00:00",
+  "user_id": "user_id"
+}
+```
+
+#### POST `/visual/generate-flowchart-multi`
+Generates a unified flowchart combining information from multiple documents.
+
+**Request Body**:
+```json
+{
+  "file_ids": ["uuid1", "uuid2"],
+  "prompt": "Create unified flowchart",  // Optional
+  "flowchart_type": "process"  // Optional
+}
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "file_ids": ["uuid1", "uuid2"],
+  "documents": [{"id": "uuid1", "name": "doc1.pdf"}],
+  "flowchart_type": "process",
+  "flowchart_description": "AI-generated description...",
+  "mermaid_syntax": "graph TD\nA[Doc1] --> B[Doc2]",
+  "generated_at": "2024-01-01T12:00:00",
+  "user_id": "user_id"
+}
+```
+
+For complete documentation, see [VISUAL_SERVICE_ENDPOINTS.md](./VISUAL_SERVICE_ENDPOINTS.md)

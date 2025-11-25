@@ -175,5 +175,11 @@ router.delete(
   controller.deleteChatsByFile
 );
 
+// Get document with all related data (chunks, chats, metadata) - user-specific
+router.get(
+  '/document/:file_id/complete',
+  protect,
+  controller.getDocumentComplete
+);
 
 module.exports = router;

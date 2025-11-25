@@ -2358,30 +2358,32 @@ async function getSystemPrompt(context = '') {
     const dbSystemPrompt = await SystemPrompt.getLatestSystemPrompt();
     
     // STRICT COMPLIANCE: Database system prompt takes PRECEDENCE
-    // Adaptive context is added as ENHANCEMENT, not replacement
-    if (dbSystemPrompt && context) {
-      // Database prompt first (PRIMARY), then adaptive context (ENHANCEMENT)
-      const combinedPrompt = `${dbSystemPrompt}
-
-${context}`;
-      console.log('[SystemPrompt] 🔄 Using database system prompt (PRIMARY) + adaptive context (ENHANCEMENT)');
-      console.log(`[SystemPrompt] Database prompt length: ${dbSystemPrompt.length} chars | Adaptive context: ${context.length} chars`);
-      return combinedPrompt;
-    }
-    
-    // Use database system prompt if available (STRICT COMPLIANCE)
-    if (dbSystemPrompt) {
+    // For strict compliance, use ONLY database prompt when available
+    // Do NOT combine with context to ensure database prompt is strictly enforced
+    if (dbSystemPrompt && dbSystemPrompt.trim()) {
       console.log('[SystemPrompt] ✅ Using system prompt from database (STRICT COMPLIANCE MODE)');
       console.log(`[SystemPrompt] Database prompt length: ${dbSystemPrompt.length} chars`);
-      return dbSystemPrompt;
+      console.log(`[SystemPrompt] Database prompt preview: ${dbSystemPrompt.substring(0, 200)}...`);
+      // Return ONLY the database prompt for strict compliance
+      // Context is NOT added to ensure database prompt rules are strictly enforced
+      return dbSystemPrompt.trim();
     }
     
     // Fallback to context or default (only if no database prompt exists)
     console.log('[SystemPrompt] ⚠️ No database prompt found, using fallback system instruction');
-    return context || 'You are a helpful legal AI assistant.';
+    if (context && context.trim()) {
+      console.log(`[SystemPrompt] Using context as fallback (${context.length} chars)`);
+      return context.trim();
+    }
+    console.log('[SystemPrompt] Using default fallback system instruction');
+    return 'You are a helpful legal AI assistant.';
   } catch (err) {
     console.error('[SystemPrompt] ❌ Error getting system prompt, using fallback:', err.message);
-    return context || 'You are a helpful legal AI assistant.';
+    console.error('[SystemPrompt] Error stack:', err.stack);
+    if (context && context.trim()) {
+      return context.trim();
+    }
+    return 'You are a helpful legal AI assistant.';
   }
 }
 
@@ -2399,7 +2401,15 @@ async function callSinglePrompt(provider, prompt, context = '') {
   // Get system prompt from database
   const systemPrompt = await getSystemPrompt(context);
   const hasWebSearchInPrompt = prompt.includes('WEB SEARCH RESULTS') || prompt.includes('Web Search Results');
-  console.log(`[SystemPrompt] 📝 Applying system instruction for ${provider} (length: ${systemPrompt.length} chars)${hasWebSearchInPrompt ? ' [WITH WEB SEARCH DATA IN PROMPT]' : ''}`);
+  
+  // Validate system prompt
+  const hasValidSystemPrompt = systemPrompt && systemPrompt.trim().length > 0;
+  if (!hasValidSystemPrompt) {
+    console.error(`[SystemPrompt] ❌ CRITICAL: System prompt is missing or empty for ${provider}! Responses may not comply with legal domain restrictions!`);
+  } else {
+    console.log(`[SystemPrompt] ✅ System prompt validated for ${provider} (length: ${systemPrompt.trim().length} chars)${hasWebSearchInPrompt ? ' [WITH WEB SEARCH DATA IN PROMPT]' : ''}`);
+    console.log(`[SystemPrompt] System prompt preview: ${systemPrompt.trim().substring(0, 200)}...`);
+  }
   if (hasWebSearchInPrompt) {
     console.log(`[Web Search] ✅ ${provider} model will receive web search results in prompt`);
   }
@@ -2437,6 +2447,12 @@ async function callSinglePrompt(provider, prompt, context = '') {
               console.log(`[Gemini 3.0 Pro] 📉 Truncated prompt from ${prompt.length} to ${finalPrompt.length} chars`);
             }
             
+            // Validate system prompt before building request
+            const hasValidSystemPrompt = finalSystemPrompt && finalSystemPrompt.trim().length > 0;
+            if (!hasValidSystemPrompt) {
+              console.error(`[callSinglePrompt] ❌ CRITICAL: System prompt is missing or empty for Gemini 3.0 Pro ${modelName}! Responses may not comply with legal domain restrictions!`);
+            }
+            
             // Build request for new SDK
             const requestPayload = {
               model: modelName,
@@ -2446,8 +2462,8 @@ async function callSinglePrompt(provider, prompt, context = '') {
                   parts: [{ text: finalPrompt }]
                 }
               ],
-              systemInstruction: finalSystemPrompt ? {
-                parts: [{ text: finalSystemPrompt }]
+              systemInstruction: hasValidSystemPrompt ? {
+                parts: [{ text: finalSystemPrompt.trim() }]
               } : undefined,
               generationConfig: {
                 maxOutputTokens,
@@ -2455,7 +2471,12 @@ async function callSinglePrompt(provider, prompt, context = '') {
               }
             };
             
-            console.log(`[Gemini 3.0 Pro] 🚀 Sending request with ${finalPrompt.length} chars prompt and ${(finalSystemPrompt?.length || 0)} chars system instruction`);
+            console.log(`[Gemini 3.0 Pro] 🚀 Sending request with ${finalPrompt.length} chars prompt and ${(hasValidSystemPrompt ? finalSystemPrompt.trim().length : 0)} chars system instruction`);
+            if (hasValidSystemPrompt) {
+              console.log(`[callSinglePrompt] ✅ System prompt WILL be applied to Gemini 3.0 Pro ${modelName} (${finalSystemPrompt.trim().length} chars)`);
+            } else {
+              console.error(`[callSinglePrompt] ❌ System prompt NOT applied to Gemini 3.0 Pro ${modelName} - responses may not comply with legal domain restrictions!`);
+            }
             
             // Add timeout wrapper for the request
             const requestPromise = genAI3.models.generateContent(requestPayload);
@@ -2503,12 +2524,22 @@ async function callSinglePrompt(provider, prompt, context = '') {
           }
         } else {
           // Use old SDK for legacy Gemini models
-          console.log(`[SystemPrompt] 🎯 Gemini ${modelName} using legacy SDK with systemInstruction from database`);
+          const hasValidSystemPrompt = systemPrompt && systemPrompt.trim().length > 0;
+          if (!hasValidSystemPrompt) {
+            console.error(`[callSinglePrompt] ❌ CRITICAL: System prompt is missing or empty for Gemini ${modelName}! Responses may not comply with legal domain restrictions!`);
+          } else {
+            console.log(`[SystemPrompt] 🎯 Gemini ${modelName} using legacy SDK with systemInstruction from database (${systemPrompt.trim().length} chars)`);
+          }
           const model = genAI.getGenerativeModel(
-            systemPrompt
-              ? { model: modelName, systemInstruction: systemPrompt }
+            hasValidSystemPrompt
+              ? { model: modelName, systemInstruction: systemPrompt.trim() }
               : { model: modelName }
           );
+          if (hasValidSystemPrompt) {
+            console.log(`[callSinglePrompt] ✅ System prompt WILL be applied to Gemini ${modelName} (${systemPrompt.trim().length} chars)`);
+          } else {
+            console.error(`[callSinglePrompt] ❌ System prompt NOT applied to Gemini ${modelName} - responses may not comply with legal domain restrictions!`);
+          }
           const result = await model.generateContent(prompt, {
             generationConfig: {
               maxOutputTokens,
@@ -2641,6 +2672,12 @@ async function* streamLLM(providerName, userMessage, context = '', relevant_chun
   const isGemini = provider.startsWith('gemini');
   const isClaude = provider.startsWith('claude') || provider === 'anthropic';
 
+  // Log system prompt status for debugging
+  console.log(`[streamLLM] System prompt status: ${systemPrompt ? `✅ Present (${systemPrompt.length} chars)` : '❌ Missing'}`);
+  if (systemPrompt) {
+    console.log(`[streamLLM] System prompt preview: ${systemPrompt.substring(0, 200)}...`);
+  }
+
   // Stream based on provider
   if (isGemini) {
     const models = GEMINI_MODELS[provider] || GEMINI_MODELS['gemini'];
@@ -2651,12 +2688,26 @@ async function* streamLLM(providerName, userMessage, context = '', relevant_chun
         
         if (isGemini3Pro) {
           // Gemini 3.0 Pro streaming (new SDK)
+          // CRITICAL: Always include system prompt if available (for strict compliance)
+          const hasValidSystemPrompt = systemPrompt && systemPrompt.trim().length > 0;
+          if (!hasValidSystemPrompt) {
+            console.warn(`[streamLLM] ⚠️ WARNING: System prompt is missing or empty for ${modelName}! This may cause non-compliant responses.`);
+          }
+          
           const request = {
             model: modelName,
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
+            systemInstruction: hasValidSystemPrompt ? { parts: [{ text: systemPrompt.trim() }] } : undefined,
             generationConfig: { maxOutputTokens, temperature: 0.7 },
           };
+          
+          // Log request details to verify system prompt is included
+          console.log(`[streamLLM] Gemini 3.0 Pro request: model=${modelName}, hasSystemInstruction=${!!request.systemInstruction}, systemPromptLength=${hasValidSystemPrompt ? systemPrompt.trim().length : 0}`);
+          if (hasValidSystemPrompt) {
+            console.log(`[streamLLM] ✅ System prompt WILL be applied to ${modelName} (${systemPrompt.trim().length} chars)`);
+          } else {
+            console.error(`[streamLLM] ❌ System prompt NOT applied to ${modelName} - responses may not comply with legal domain restrictions!`);
+          }
           
           // Stream response
           const response = await genAI3.models.generateContentStream(request);
@@ -2695,9 +2746,22 @@ async function* streamLLM(providerName, userMessage, context = '', relevant_chun
           return; // Successfully streamed
         } else {
           // Legacy Gemini streaming
-          const model = genAI.getGenerativeModel(
-            systemPrompt ? { model: modelName, systemInstruction: systemPrompt } : { model: modelName }
-          );
+          // CRITICAL: Always include system prompt if available (for strict compliance)
+          const hasValidSystemPrompt = systemPrompt && systemPrompt.trim().length > 0;
+          if (!hasValidSystemPrompt) {
+            console.warn(`[streamLLM] ⚠️ WARNING: System prompt is missing or empty for ${modelName}! This may cause non-compliant responses.`);
+          }
+          
+          const modelConfig = hasValidSystemPrompt 
+            ? { model: modelName, systemInstruction: systemPrompt.trim() } 
+            : { model: modelName };
+          console.log(`[streamLLM] Legacy Gemini request: model=${modelName}, hasSystemInstruction=${!!modelConfig.systemInstruction}, systemPromptLength=${hasValidSystemPrompt ? systemPrompt.trim().length : 0}`);
+          if (hasValidSystemPrompt) {
+            console.log(`[streamLLM] ✅ System prompt WILL be applied to ${modelName} (${systemPrompt.trim().length} chars)`);
+          } else {
+            console.error(`[streamLLM] ❌ System prompt NOT applied to ${modelName} - responses may not comply with legal domain restrictions!`);
+          }
+          const model = genAI.getGenerativeModel(modelConfig);
           const result = await model.generateContentStream(prompt, {
             generationConfig: { maxOutputTokens },
           });
@@ -2716,16 +2780,32 @@ async function* streamLLM(providerName, userMessage, context = '', relevant_chun
   }
 
   // Claude / OpenAI / DeepSeek streaming
+  // CRITICAL: Always include system prompt if available (for strict compliance)
+  const hasValidSystemPrompt = systemPrompt && systemPrompt.trim().length > 0;
+  if (!hasValidSystemPrompt) {
+    console.warn(`[streamLLM] ⚠️ WARNING: System prompt is missing or empty for ${provider}! This may cause non-compliant responses.`);
+  }
+  
   const messages = isClaude
     ? [{ role: 'user', content: prompt }]
-    : [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }];
+    : hasValidSystemPrompt 
+      ? [{ role: 'system', content: systemPrompt.trim() }, { role: 'user', content: prompt }]
+      : [{ role: 'user', content: prompt }];
 
   const resolvedModelName = config.model;
   const maxTokens = await getModelMaxTokens(provider, resolvedModelName);
 
   const payload = isClaude
-    ? { model: config.model, max_tokens: maxTokens, messages, system: systemPrompt, stream: true }
+    ? { model: config.model, max_tokens: maxTokens, messages, system: hasValidSystemPrompt ? systemPrompt.trim() : undefined, stream: true }
     : { model: config.model, messages, max_tokens: maxTokens, temperature: 0.5, stream: true };
+  
+  // Log payload details to verify system prompt is included
+  console.log(`[streamLLM] ${provider} request: model=${resolvedModelName}, hasSystemPrompt=${hasValidSystemPrompt}, systemPromptLength=${hasValidSystemPrompt ? systemPrompt.trim().length : 0}, messagesCount=${messages.length}`);
+  if (hasValidSystemPrompt) {
+    console.log(`[streamLLM] ✅ System prompt WILL be applied to ${provider} ${resolvedModelName} (${systemPrompt.trim().length} chars)`);
+  } else {
+    console.error(`[streamLLM] ❌ System prompt NOT applied to ${provider} ${resolvedModelName} - responses may not comply with legal domain restrictions!`);
+  }
 
   // For OpenAI/Claude/DeepSeek, we need to use streaming endpoints
   const response = await axios.post(config.apiUrl, payload, {
