@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Google Cloud credentials
+*.json
+!package.json
+!tsconfig.json
+visual-graphic-key.json
+service-account-key.json
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build
+dist/
+build/
+*.pid
+*.seed
+*.pid.lock
+
+# Testing
+coverage/
+.nyc_output/
+
+# Temporary
+tmp/
+temp/
+
+
+

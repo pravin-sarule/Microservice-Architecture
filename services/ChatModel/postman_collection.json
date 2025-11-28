@@ -1,0 +1,231 @@
+{
+	"info": {
+		"_postman_id": "chatmodel-collection-001",
+		"name": "ChatModel Service API",
+		"description": "Postman collection for testing ChatModel service endpoints",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/health",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"health"
+					]
+				},
+				"description": "Check if the ChatModel service is running"
+			},
+			"response": []
+		},
+		{
+			"name": "Upload Document",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{auth_token}}",
+						"type": "text",
+						"description": "JWT token from auth service"
+					}
+				],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "document",
+							"type": "file",
+							"src": [],
+							"description": "Select a file to upload (PDF, TXT, DOCX, etc.)"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}/api/chat/upload-document",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"chat",
+						"upload-document"
+					]
+				},
+				"description": "Upload a document to GCS bucket. The file will be stored and you'll receive a file_id to use for asking questions."
+			},
+			"response": []
+		},
+		{
+			"name": "Ask Question",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{auth_token}}",
+						"type": "text"
+					},
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"question\": \"What is this document about?\",\n    \"file_id\": \"{{file_id}}\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/chat/ask",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"chat",
+						"ask"
+					]
+				},
+				"description": "Ask a question to the LLM about an uploaded document. You can ask unlimited questions about the same document."
+			},
+			"response": []
+		},
+		{
+			"name": "Get User Files",
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{auth_token}}",
+						"type": "text"
+					}
+				],
+				"url": {
+					"raw": "{{base_url}}/api/chat/files",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"chat",
+						"files"
+					]
+				},
+				"description": "Get list of all files uploaded by the authenticated user"
+			},
+			"response": []
+		},
+		{
+			"name": "Ask Question - Example 1",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{auth_token}}",
+						"type": "text"
+					},
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"question\": \"Summarize the main points from this document\",\n    \"file_id\": \"{{file_id}}\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/chat/ask",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"chat",
+						"ask"
+					]
+				},
+				"description": "Example: Ask for a summary"
+			},
+			"response": []
+		},
+		{
+			"name": "Ask Question - Example 2",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{auth_token}}",
+						"type": "text"
+					},
+					{
+						"key": "Content-Type",
+						"value": "application/json",
+						"type": "text"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"question\": \"What are the key dates mentioned in this document?\",\n    \"file_id\": \"{{file_id}}\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "{{base_url}}/api/chat/ask",
+					"host": [
+						"{{base_url}}"
+					],
+					"path": [
+						"api",
+						"chat",
+						"ask"
+					]
+				},
+				"description": "Example: Ask about specific information"
+			},
+			"response": []
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:5003",
+			"type": "string"
+		},
+		{
+			"key": "auth_token",
+			"value": "your_jwt_token_here",
+			"type": "string"
+		},
+		{
+			"key": "file_id",
+			"value": "file_id_from_upload_response",
+			"type": "string"
+		}
+	]
+}
+
+
