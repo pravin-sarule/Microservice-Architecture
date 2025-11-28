@@ -15,6 +15,7 @@ const paymentProxy = require("./routes/paymentProxy");
 const supportProxy = require("./routes/supportProxy");
 const draftProxy = require("./routes/draftProxy");
 const visualProxy = require("./routes/visualProxy");
+const chatProxy = require("./routes/chatProxy");
 // const userResourcesProxy = require("./routes/userResourcesProxy");
 
 const app = express();
@@ -81,6 +82,7 @@ app.use(paymentProxy);
 app.use("/support", supportProxy);
 app.use("/drafting", draftProxy);
 app.use(visualProxy); // Visual Service proxy for flowchart generation
+app.use(chatProxy); // ChatModel Service proxy for document Q&A
 // app.use(userResourcesProxy);
 
 // Catch-all for 404 errors
